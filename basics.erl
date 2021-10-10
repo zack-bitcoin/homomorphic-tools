@@ -184,7 +184,6 @@ carmichael(N) ->
     lcm(Cs).
 carmichael_number(N) ->
     divides(carmichael(N), N-1).
-ord(A, N) ->
     
 
 

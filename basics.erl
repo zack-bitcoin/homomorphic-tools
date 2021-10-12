@@ -146,6 +146,7 @@ eulers_phi2([[P, E]|T], Acc) ->
 
 %multiplicative inverse using euler's phi.
 inverse_euler(A, N) ->
+    1 = gcd_binary(A, N),
     lrpow(A, eulers_phi(N)-1, N).
       
 %checking primality by trial division.      
@@ -184,6 +185,14 @@ carmichael(N) ->
     lcm(Cs).
 carmichael_number(N) ->
     divides(carmichael(N), N-1).
+
+ord(A, N) ->
+    %return E. E is the smallest positive integer where A^E == 1 in Z_N
+    ok.
+
+is_generator(A, N) ->
+    1 = gcd_binary(A, N),
+    ord(A, N) == eulers_phi(N).
     
 
 

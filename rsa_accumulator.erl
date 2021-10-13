@@ -1,7 +1,7 @@
 -module(rsa_accumulator).
--export([test/0]).
+-export([test/1]).
 
--record(acc, {p1, p2, mod, phi, g, 
+-record(acc, {p1, p2, mod, phi, g, l,
               v = 1, expt = 1}).
 
 gcd(A, B) when
@@ -13,7 +13,7 @@ gcd(A, B) when A < B ->
 gcd(A, B) -> 
     gcd(B, A rem B).
 
-to_bits_list(0) -> [];
+to_bits_list(0) -> [0];
 to_bits_list(N) ->
     B = N rem 2,
     [(N rem 2)|to_bits_list(N div 2)].
@@ -21,6 +21,7 @@ rlpow(B, E, N) ->
     % math:pow(B, E) rem N
     E2 = to_bits_list(E),
     rlpow2(1, B, E2, N).
+%rlpow2(A, _, [], _) -> A;
 rlpow2(A, _, [0], _) -> A;
 rlpow2(A, C, [1], N) -> 
     (A * C) rem N;
@@ -33,25 +34,51 @@ rlpow2(A, C, [0|T], N) ->
            (C*C) rem N, 
            T, N).
 
+lcm(A, B) ->
+    A * B div gcd(A, B).
+carmichael(P1, P2) ->
+    %lcm(((P1 - 1) div 2),
+    %    ((P2 - 1) div 2)).
+    lcm(((P1 - 1)),
+        ((P2 - 1))).
+
 new(P1, P2) ->
     %created from 2 prime numbers.
     N = P1 * P2,
     F = (P1-1)*(P2-1),%euler's phi.
     %choose random G coprime to N.
+    L = carmichael(P1, P2),
     G = choose_random_star(N),
+    io:fwrite("G: "),
+    io:fwrite(integer_to_list(rlpow(G, L+5, N))),
+    io:fwrite("\n"),
+    io:fwrite(integer_to_list(rlpow(G, (2*L)+5, N))),
+    io:fwrite("\n"),
+    io:fwrite(integer_to_list(rlpow(G, (20*L)+5, N))),
+    io:fwrite("\n"),
     #acc{p1 = P1, p2 = P2, 
          phi = F, mod = N, 
+         l = L,
          g = G}.
 
+store([], A) -> A;
+store(Ps, A) when is_list(Ps) -> 
+    P = lists:foldl(
+          fun(C, B) -> C * B end,
+          1, 
+          Ps),
+    store(P, A);
 store(P, A) ->
     %P is a prime number that are not already in A.
     #acc{
        expt = E,
        g = G,
-       mod = N
+       mod = N,
+       phi = F,
+       l = L
       } = A,
-    E2 = (E*P) rem N,
-    V = rlpow(G, E2, N),
+    E2 = (E*P),% rem (L),
+    V = rlpow(G, (E2 rem L), N),
     A#acc{v = V, expt = E2}.
 
 inverse(P, A) ->
@@ -61,19 +88,101 @@ inverse(P, A) ->
         } = A,
     rlpow(P, F-1, N).
 
+nth_root(N, P, A) ->
+    #acc{
+          g = G,
+          mod = Mod,
+          l = L
+        } = A,
+    %R^N = P
+    %P^L = 1
+    %P^(L+1) = 1
+    %P^((2*L)+1) = 1
+    %P^((3*L)+1) = 1
+    
+    
+
+    Result = rlpow(P, ((L div N)+1) div N, Mod),
+    Result.
+
+
 prove(P, A) ->
     %V ^ (1/P) mod N
+    %Pth root of V mod N.
     #acc{
        v = V,
        g = G,
        mod = N,
-       expt = E
+       expt = E,
+       l = L
       } = A,
-    rlpow(G, E div P, N).
-    %IP = inverse(P, A),
-    %1 = (P*IP) rem N,
-%rlpow(V, IP, N).
+    B = E rem P,
+    if
+        B == 0 ->
+            rlpow(G, ((E div P)rem L), N);
+        true -> false
+    end.
+%bezout coefficients for A and B are S and T
+%  such that (S*A) + (T*B) = gcd(A, B)
+% Extended Euclidean Algorithm finds S and T.
+eea(A, B)
+  when ((A < 1) 
+        or (B < 1)) ->
+    undefined;
+eea(A, B) ->
+    eea_helper(A, 1, 0, B, 0, 1).
+eea_helper(G, S, T, 0, _, _) ->
+    {G, S, T};
+eea_helper(G0, S0, T0, G1, S1, T1) ->
+    Q = G0 div G1,
+    eea_helper(G1, S1, T1, 
+               G0 - (Q*G1),
+               S0 - (Q*S1),
+               T0 - (Q*T1)).
+prove_empty(P, A) ->
+    %V = G^E
+    %find a, b such that ((a*P)+(b*E)) mod N = 1
+    %bezout coefficients
+    %proof = [G^a, b]
+    #acc{
+          v = V,
+          g = G,
+          expt = E,
+          mod = N,
+          l = L
+        } = A,
+    {1, X0, Y0} = eea(P, E),
+    X = if
+            (X0 < 0) -> X0 + L;
+            true -> X0
+        end,
+    Y = if
+            (Y0 < 0) -> Y0 + L;
+            true -> Y0
+        end,
+    true = (((X*P) + (Y*E)) rem L == 1),
+    %io:fwrite([X, Y]),
+    {rlpow(G, X, N), Y}.
+verify_empty({D, B}, P, A) ->
+    %D^P * V^B 
+    % = G ^ (a*P + E*B)
+    % = G ^ 1 = G
+    #acc{
+          v = V,
+          g = G,
+          mod= N,
+          l = L
+        } = A,
+    %io:fwrite([-1, D, P, V, B]),
+    ((rlpow(D, P, N) 
+      * rlpow(V, B, N)) 
+     rem N)
+        == G.
 
+inverse_fermat(A, P) ->
+    rlpow(A, P-2, P).
+    
+verify(false, _, _) -> false;
 verify(Proof, P, A) ->
     #acc{
         v = V,
@@ -91,14 +200,38 @@ choose_random_star(N) ->
     end.
             
 
-test() ->
+test(1) ->
     A = new(13, 17),
-    Prime = 2,
+    %A = new(7727, 7741),
+    Prime = 5,
     A2 = store(Prime, A), 
     P = prove(Prime, A2),
+    false = prove(Prime, A),
     true = verify(P, Prime, A2),
     false = verify(P, 3, A2),
-    false = verify(45, 2, A2),
+    false = verify(45, Prime, A2),
     false = verify(45, 3, A2),
-    success.
+    P2 = prove_empty(3, A2),
+    true = verify_empty(P2, 3, A2),
+    false = verify_empty(P2, 7, A2),
+         
+    success;
+   
+test(2) -> 
+    %A = new(13, 17),
+    A = new(7727, 7741),
+    Primes = [3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37],
+    %Primes = [3],
+    A2 = store(Primes, A),
+    P2 = prove_empty(43, A2),
+    true = verify_empty(P2, 43, A2),
+    false = verify_empty(P2, 47, A2),
+    {lists:map(fun(X) ->
+                      P = prove(X, A2),
+                       %io:fwrite(integer_to_list(P)),
+                      %io:fwrite("\n"),
+                      true = verify(P, X, A2)
+              end, Primes),
+     A,
+     A2}.
     

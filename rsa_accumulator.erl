@@ -2,7 +2,11 @@
 -export([test/1]).
 
 -record(acc, {p1, p2, mod, phi, g, l,
-              v = 1, expt = 1}).
+              v, expt = 1}).
+
+% nice example code https://github.com/oleiba/RSA-accumulator/blob/master/main.py
+
+mod(X,Y)->(X rem Y + Y) rem Y.
 
 gcd(A, B) when
       ((A < 0) or (B < 0)) ->
@@ -11,7 +15,8 @@ gcd(A, 0) -> A;
 gcd(A, B) when A < B -> 
     gcd(B, A);
 gcd(A, B) -> 
-    gcd(B, A rem B).
+    %gcd(B, A rem B).
+    gcd(B, mod(A, B)).
 
 to_bits_list(0) -> [0];
 to_bits_list(N) ->
@@ -49,16 +54,20 @@ new(P1, P2) ->
     %choose random G coprime to N.
     L = carmichael(P1, P2),
     G = choose_random_star(N),
-    io:fwrite("G: "),
-    io:fwrite(integer_to_list(rlpow(G, L+5, N))),
-    io:fwrite("\n"),
-    io:fwrite(integer_to_list(rlpow(G, (2*L)+5, N))),
-    io:fwrite("\n"),
-    io:fwrite(integer_to_list(rlpow(G, (20*L)+5, N))),
-    io:fwrite("\n"),
+    if
+        false ->
+            io:fwrite("G: "),
+            io:fwrite(integer_to_list(rlpow(G, L+5, N))),
+            io:fwrite("\n"),
+            io:fwrite(integer_to_list(rlpow(G, (2*L)+5, N))),
+            io:fwrite("\n"),
+            io:fwrite(integer_to_list(rlpow(G, (20*L)+5, N))),
+            io:fwrite("\n");
+        true -> ok
+    end,
     #acc{p1 = P1, p2 = P2, 
          phi = F, mod = N, 
-         l = L,
+         l = L, v = G,
          g = G}.
 
 store([], A) -> A;
@@ -71,40 +80,14 @@ store(Ps, A) when is_list(Ps) ->
 store(P, A) ->
     %P is a prime number that are not already in A.
     #acc{
+       v = V1,
        expt = E,
        g = G,
-       mod = N,
-       phi = F,
-       l = L
+       mod = N
       } = A,
-    E2 = (E*P),% rem (L),
-    V = rlpow(G, (E2 rem L), N),
-    A#acc{v = V, expt = E2}.
-
-inverse(P, A) ->
-    #acc{
-         phi = F,
-         mod = N
-        } = A,
-    rlpow(P, F-1, N).
-
-nth_root(N, P, A) ->
-    #acc{
-          g = G,
-          mod = Mod,
-          l = L
-        } = A,
-    %R^N = P
-    %P^L = 1
-    %P^(L+1) = 1
-    %P^((2*L)+1) = 1
-    %P^((3*L)+1) = 1
-    
-    
-
-    Result = rlpow(P, ((L div N)+1) div N, Mod),
-    Result.
-
+    E2 = (E*P),
+    V2 = rlpow(V1, P, N),
+    A#acc{v = V2, expt = E2}.
 
 prove(P, A) ->
     %V ^ (1/P) mod N
@@ -113,14 +96,16 @@ prove(P, A) ->
        v = V,
        g = G,
        mod = N,
-       expt = E,
-       l = L
+       expt = E
       } = A,
-    B = E rem P,
+    %B = E rem P,
+    B = mod(E, P),
     if
         B == 0 ->
-            rlpow(G, ((E div P)rem L), N);
-        true -> false
+            rlpow(G, (E div P), N);
+        true -> 
+            %io:fwrite("cannot prove what is not accumulated."),
+            false
     end.
 %bezout coefficients for A and B are S and T
 %  such that (S*A) + (T*B) = gcd(A, B)
@@ -148,21 +133,17 @@ prove_empty(P, A) ->
           v = V,
           g = G,
           expt = E,
-          mod = N,
-          l = L
+          mod = N
         } = A,
     {1, X0, Y0} = eea(P, E),
-    X = if
-            (X0 < 0) -> X0 + L;
-            true -> X0
+    D = if
+            (X0 < 0) -> 
+                X = -X0,
+                IG = inverse(G, N),
+                rlpow(IG, X, N);
+            true -> rlpow(G, X0, N)
         end,
-    Y = if
-            (Y0 < 0) -> Y0 + L;
-            true -> Y0
-        end,
-    true = (((X*P) + (Y*E)) rem L == 1),
-    %io:fwrite([X, Y]),
-    {rlpow(G, X, N), Y}.
+    {D, Y0}.
 verify_empty({D, B}, P, A) ->
     %D^P * V^B 
     % = G ^ (a*P + E*B)
@@ -170,17 +151,29 @@ verify_empty({D, B}, P, A) ->
     #acc{
           v = V,
           g = G,
-          mod= N,
-          l = L
+          mod = N
         } = A,
-    %io:fwrite([-1, D, P, V, B]),
-    ((rlpow(D, P, N) 
-      * rlpow(V, B, N)) 
-     rem N)
-        == G.
+    BPart = 
+        if
+            (B > 0) -> rlpow(V, B, N);
+            true ->
+                B_positive = -B,
+                IV = inverse(V, N),
+                %1 = mod((V * IV),N),
+                rlpow(IV, B_positive, N)
+        end,
+    G == mod(rlpow(D, P, N) 
+              * BPart,
+              N).
 
-inverse_fermat(A, P) ->
-    rlpow(A, P-2, P).
+inverse(A, N) ->    
+    {G, S, T} = eea(A, N),
+    case G of
+        1 -> S;
+        _ -> 
+            io:fwrite("inverse does not exist"),
+            does_not_exist
+    end.
     
 verify(false, _, _) -> false;
 verify(Proof, P, A) ->
@@ -189,20 +182,19 @@ verify(Proof, P, A) ->
         mod = N} = A,
     R = rlpow(Proof, P, N),
     R == V.
-    
 
 choose_random_star(N) ->
     R = random:uniform(N),
     B = gcd(R, N),
-    case B of
-        1 -> R;
-        _ -> choose_random_star(N)
+    if
+        (B == 1) -> R;
+        true -> choose_random_star(N)
     end.
             
 
 test(1) ->
-    A = new(13, 17),
-    %A = new(7727, 7741),
+    %A = new(13, 17),
+    A = new(7727, 7741),
     Prime = 5,
     A2 = store(Prime, A), 
     P = prove(Prime, A2),
@@ -214,7 +206,6 @@ test(1) ->
     P2 = prove_empty(3, A2),
     true = verify_empty(P2, 3, A2),
     false = verify_empty(P2, 7, A2),
-         
     success;
    
 test(2) -> 

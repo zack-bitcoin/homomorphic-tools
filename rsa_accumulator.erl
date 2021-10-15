@@ -4,6 +4,10 @@
 -record(acc, {p1, p2, mod, phi, g, l,
               v, expt = 1}).
 
+%for the accumulator P1, P2, phi, and l need to all be secret.
+%we are taking advantage of the multiplication homomorphism of RSA. (N^X)^Y = N^(X*Y)
+%we can accumulate prime numbers, because there is no way to multiple some prime numbers to calcualte other prime numbers.
+
 % nice example code https://github.com/oleiba/RSA-accumulator/blob/master/main.py
 
 mod(X,Y)->(X rem Y + Y) rem Y.

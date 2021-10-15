@@ -9,6 +9,7 @@
          prime_factors/1,
          carmichael/1,
          carmichael_number/1,
+         inverse/2,
          test/0]).
 
 divides(A, B) ->
@@ -108,12 +109,19 @@ rlpow2(A, C, [0|T], N) ->
             
 %multiplicative inverse using EEA
 inverse(A, N) ->    
-    {G, S, T} = eea(A, N),
-    case G of
-        1 -> S;
-        _ -> 
+    EEA = eea(A, N),
+    case EEA of
+        undefined -> 
+            io:fwrite(A),
             io:fwrite("inverse does not exist"),
-            does_not_exist
+            does_not_exist;
+        {G, S, T} ->
+            case G of
+                1 -> S;
+                _ -> 
+                    io:fwrite("inverse does not exist"),
+                    does_not_exist
+            end
     end.
 
 %multiplicative inverse using fermat
@@ -186,14 +194,55 @@ carmichael(N) ->
 carmichael_number(N) ->
     divides(carmichael(N), N-1).
 
-ord(A, N) ->
+%ord(A, N) ->
     %return E. E is the smallest positive integer where A^E == 1 in Z_N
-    ok.
+%    ok.
 
-is_generator(A, N) ->
-    1 = gcd_binary(A, N),
-    ord(A, N) == eulers_phi(N).
-    
+%is_generator(A, N) ->
+%    1 = gcd_binary(A, N),
+%    ord(A, N) == eulers_phi(N).
+
+%chinese remainder algorithm
+cra(Rs, Ns) ->
+    %remainders [r_1, r_2, ... , r_k]
+    %moduli [n_1, n_2, ... , n_k]
+    N = lists:foldl(fun(A, B) -> A * B end,
+                    1, Ns),
+    M = lists:map(fun(X) -> 
+                          Y = N div X,
+                          {Y, inverse(Y, X)}
+                  end, Ns),
+    cra2(Rs, M, N, 0).
+cra2([], [], N, X) -> X rem N;
+cra2([R|RT], [{M, C}|MT], N, X) ->
+    cra2(RT, MT, N, (X + (R*M*C)) rem N).
+
+eulers_criterion(A, P) ->
+    %returns true if A is a quadratic residue.
+    %returns true if A has a square root in mod P.
+    true = is_prime(P),
+    true = 1 == P rem 2,
+    C = rlpow(A, (P-1) div 2, P),
+    P2 = P-1,
+    case C of
+        1 -> true;
+        P2 -> false
+    end.
+
+legendre_symbol(A, P) ->
+    B = ((A rem P) == 0),
+    if
+        B -> 0;
+        true ->
+            B2 = eulers_criterion(A, P),
+            if
+                B2 -> 1;
+                true -> -1
+            end
+    end.
+                    
+            
+            
 
 
 test() ->
@@ -204,5 +253,6 @@ test() ->
     false = carmichael_number(560),
     false = carmichael_number(559),
     false = carmichael_number(123),
+    10880 = cra([5, 12, 2], [15, 22, 49]),
     success.
     

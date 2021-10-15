@@ -32,6 +32,7 @@ test(1) ->
     I = elliptic:addition(G, H, E),
 
     %G, and H, and I need to be generators of a prime ordered group.
+    %we are making 3 generators because we want to be able to store 3 variables in this accumulator.
     GroupOrder = 7,
     infinity = elliptic:multiplication(H, GroupOrder, E),
     H = elliptic:multiplication(H, GroupOrder+1, E),

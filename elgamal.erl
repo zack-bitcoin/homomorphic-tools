@@ -38,11 +38,16 @@ test(1) ->
     H = elliptic:multiplication(H, GroupOrder+1, E),
     infinity = elliptic:multiplication(G, GroupOrder, E),
     G = elliptic:multiplication(G, GroupOrder+1, E),
-  
-    C = commit([1, 2, 3], [G, H, I], E),
-    C23 = commit([2, 3], [H, I], E),%proof of 1
-    C = commit([1, 1], [G, C23], E),%verify 1
-    C13 = commit([1, 3], [G, I], E),%proof of 2
-    C = commit([1, 2], [C13, H], E),%verify 2
+    [V1, V2, V3] = [2, 2, 3],
+    C = commit([V1, V2, V3], [G, H, I], E),
+    Proof1 = commit([V2, V3], [H, I], E),
+    C = commit([V1, 1], [G, Proof1], E),%verify V1
+    Proof2 = commit([V1, V3], [G, I], E),
+    C = commit([1, V2], [Proof2, H], E),%verify V2
+
  
     success.
+    
+
+
+

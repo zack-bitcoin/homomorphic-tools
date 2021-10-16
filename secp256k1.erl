@@ -16,6 +16,14 @@ make(A, B, X, Y, P, N) ->
     #curve{a = A, b = B, g = {X, Y}, 
            p = P, n = N}.
 
+det_pow(0, _) -> 0;
+det_pow(_, 0) -> 1;
+det_pow(A, 1) -> A;
+det_pow(A, N) when ((N rem 2) == 0) -> 
+    det_pow(A*A, N div 2);
+det_pow(A, N) -> 
+    A*det_pow(A, N-1).
+
 make() ->
     %FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFE FFFFFC2F
 %2256 - 232 - 29 - 28 - 27 - 26 - 24 - 1
@@ -91,12 +99,8 @@ hex_to_int2([H|T], A) ->
     A2 = (A*16) + hex_digit_to_int([H]),
     hex_to_int2(T, A2).
 
-test() ->
-    %testing to see if a random number can be used to make a generator of the group.
-    E = make(),
-    gen_point(E).
-
 gen_point(E) ->
+    %based on the decrompression of bitcoin pubkeys algorithm.
     #curve{
            p = P,
            b = B,
@@ -114,11 +118,7 @@ gen_point(E) ->
             gen_point(E)
     end.
 
-
-det_pow(0, _) -> 0;
-det_pow(_, 0) -> 1;
-det_pow(A, 1) -> A;
-det_pow(A, N) when ((N rem 2) == 0) -> 
-    det_pow(A*A, N div 2);
-det_pow(A, N) -> 
-    A*det_pow(A, N-1).
+test() ->
+    %testing to see if a random number can be used to make a generator of the group.
+    E = make(),
+    gen_point(E).

@@ -1,5 +1,5 @@
 -module(secp256k1).
--export([test/1, make/0, addition/3, 
+-export([test/0, make/0, addition/3, 
          multiplication/3]).
 
 -record(curve, {a, b, g, n, p}).
@@ -91,7 +91,8 @@ hex_to_int2([H|T], A) ->
     A2 = (A*16) + hex_digit_to_int([H]),
     hex_to_int2(T, A2).
 
-test(3) ->
+test() ->
+    %testing to see if a random number can be used to make a generator of the group.
     E = make(),
     gen_point(E).
 

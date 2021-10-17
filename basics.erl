@@ -12,6 +12,8 @@
          inverse/2,
          test/0]).
 
+%Algorithms from the book "Partially Homomorphic Encryption", by Cetin Kaya Koc, Funda Ozdemir, and Zeynep Odemis Ozger.
+
 divides(A, B) ->
     (B rem A) == 0.
 

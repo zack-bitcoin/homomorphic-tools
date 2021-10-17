@@ -1,11 +1,19 @@
 -module(secp256k1).
 -export([test/0, make/0, addition/3, 
-         multiplication/3]).
+         multiplication/3, gen_point/1,
+         on_curve/2]).
 
 -record(curve, {a, b, g, n, p}).
 
 mod(X,Y)->(X rem Y + Y) rem Y.
 
+on_curve({X, Y}, C) ->
+    #curve{
+          a = A,
+          b = B,
+          p = P
+         } = C,
+    on_curve(A, B, X, Y, P).
 on_curve(A, B, X, Y, P) ->
     %check that the point is on the curve.
     %y^2 = x^3 + A*x + B
@@ -100,13 +108,23 @@ hex_to_int2([H|T], A) ->
     hex_to_int2(T, A2).
 
 gen_point(E) ->
+    #curve{
+           p = P
+          } = E,
+    X = (random:uniform(det_pow(2, 256)) rem P),
+    G = gen_point(E, X),
+    case G of
+        error -> gen_point(E);
+        _ -> G
+    end.
+            
+gen_point(E, X) ->
     %based on the decrompression of bitcoin pubkeys algorithm.
     #curve{
            p = P,
            b = B,
            a = A
           } = E,
-    X = random:uniform(det_pow(2, 256))-1,
     Ysquare = mod(mod(X*mod(X*X, P), P) - (A*X) + B, P),
     Pident = (P+1) div 4,
     Y = basics:rlpow(Ysquare, Pident, P),
@@ -114,11 +132,14 @@ gen_point(E) ->
     if
         Check -> {X, Y};
         true -> 
-            io:fwrite("failed\n"),
-            gen_point(E)
+            %io:fwrite("failed\n"),
+            error
     end.
 
 test() ->
     %testing to see if a random number can be used to make a generator of the group.
     E = make(),
     gen_point(E).
+    
+
+    

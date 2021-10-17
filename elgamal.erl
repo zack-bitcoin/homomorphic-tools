@@ -3,6 +3,8 @@
 
 -record(curve, {a, b, g, mod}).
 
+%testing out pedersen commits in the elliptic curve version of elgamal.
+
 commit([V1, V2], [G1, G2], E) ->
     #curve{
         mod = N
@@ -31,7 +33,7 @@ test(1) ->
     H = elliptic:addition(G, G, E),
     I = elliptic:addition(G, H, E),
 
-    %G, and H, and I need to be generators of a prime ordered group.
+    %G, and H, and I need to be generators of the group.
     %we are making 3 generators because we want to be able to store 3 variables in this accumulator.
     GroupOrder = 7,
     infinity = elliptic:multiplication(H, GroupOrder, E),

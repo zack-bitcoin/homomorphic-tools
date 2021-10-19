@@ -119,7 +119,7 @@ inverse(A, N) ->
             does_not_exist;
         {G, S, T} ->
             case G of
-                1 -> S;
+                1 -> (S + N) rem N;
                 _ -> 
                     io:fwrite("inverse does not exist"),
                     does_not_exist

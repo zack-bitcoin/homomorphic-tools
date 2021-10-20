@@ -3,16 +3,28 @@
          verify_bullet/5,
          test/1]).
 
+%finite field arithmetic modulus the group order of the elliptic curve.
+%for doing operations on the scalars that we use to multiply curve points.
 fadd(X, Y, E) when is_integer(X) ->
     N = order(E),
     (X + Y) rem N.
 fmul(X, Y, E) when is_integer(X) ->
     N = order(E),
     (X * Y) rem N.
+
+%elliptic curve operations.
 add(X, Y, E) ->
     secp256k1:addition(X, Y, E).
 mul(X, Y, E) ->
     secp256k1:multiplication(X, Y, E).
+sum_up(V, E) ->
+    lists:foldl(fun(A, B) -> 
+                        add(A, B, E) end,
+                infinity, V).
+prime(E) ->
+    secp256k1:field_prime(E).
+order(E) ->
+    secp256k1:order(E).
 
 %pedersen vector commit.
 commit([V1, V2], [G1, G2], E) ->
@@ -23,23 +35,13 @@ commit(V, G, E) ->
     add(mul(hd(G), hd(V), E),
         commit(tl(V), tl(G), E),
         E).
-
 verify(G, V, C, Root, E) ->
     Root == commit([V, 1], [G, C], E).
 
-sum_up(V, E) ->
-    lists:foldl(fun(A, B) -> 
-                        add(A, B, E) end,
-                infinity, V).
-    
-
-many(N) when N < 1 -> [];
-many(N) -> [0|many(N-1)].
-
+%get the right and left points to build up squares to collapse the pedersen commitment in half.
 get_lr(G, V, E) ->
     {sum_up(get_ls(G, V, E), E),
      sum_up(get_rs(G, V, E), E)}.
-
 get_ls([], [], _) -> [];
 get_ls([G1, _|GT], [_, V2|VT], E) -> 
     P = prime(E),
@@ -51,12 +53,8 @@ get_rs([_, G2|GT], [V1, _|VT], E) ->
     P = prime(E),
     [mul(G2, V1, E)|
      get_rs(GT, VT, E)].
-
-prime(E) ->
-    secp256k1:field_prime(E).
-order(E) ->
-    secp256k1:order(E).
-    
+   
+%calculating the 1/2 length pedersen commitment 
 next_v_commit(A, B, C, S, SI) -> 
     next_v_commit(A, B, C, S, SI, [], [], []).
 next_v_commit([], [], _, _, _, Bigs, Gs, Vs) -> 
@@ -66,12 +64,15 @@ next_v_commit([], [], _, _, _, Bigs, Gs, Vs) ->
 next_v_commit([G1, G2|GT], [V1, V2|VT], 
          E, S, SI, Bigs, Gs, Vs) -> 
     N = order(E),
-    G = add(mul(G1, SI, E), mul(G2, S, E), E),
-    V = fadd(fmul(V1, S, E), fmul(V2, SI, E), E),
+    G = add(mul(G1, SI, E), 
+            mul(G2, S, E), E),
+    V = fadd(fmul(V1, S, E), 
+             fmul(V2, SI, E), E),
     next_v_commit(GT, VT, E, S, SI,
              [mul(G, V, E)|Bigs],
              [G|Gs], [V|Vs]).
 
+%random number blinding scaling factor for security
 apply_s(_, _, [], _, E) -> [];
 apply_s(S2, SI2, [L, R|T], N, E) -> 
     [mul(L, SI2, E),
@@ -88,6 +89,7 @@ verify_bullet(V, G, E, [X|LRs], S) ->
     X == sum_up([Commit|LR2], E).
 
 scale_lrs([], _, _, _) -> infinity;
+   %infinity is the zero element of the elliptic curve group.
 scale_lrs([L, R|T], S2, SI2, E) -> 
     add(
       add(mul(L, SI2, E),
@@ -110,7 +112,8 @@ make_bullet(V, Ps, E, S) ->
 
 make_bullet_lrs(V, Ps, E, S, SI) ->
     {L, R} = get_lr(Ps, V, E),
-    {C2, Ps2, Vs2} = next_v_commit(Ps, V, E, S, SI),
+    {C2, Ps2, Vs2} = 
+        next_v_commit(Ps, V, E, S, SI),
     B = length(C2),
     if
         (B == 1) -> [L, R];
@@ -126,14 +129,15 @@ range(A, B) when A < B ->
 test(1) ->
     %pedersen vector commitment
     E = secp256k1:make(),
-    Ps = lists:map(fun(_) ->
-                           secp256k1:gen_point(E)
-                   end, [1,2,3,4,5]),
+    Ps = lists:map(
+           fun(_) ->
+                   secp256k1:gen_point(E)
+           end, [1,2,3,4,5]),
     [P1, P2, P3, P4, P5] = Ps,
 
-    %storing some prime numbers in the accumulator. we can store any numbers modulus E#curve.p, the prime base of the finite field that the elliptic curve is defined over.
+    %storing some numbers in the accumulator. we can store any numbers modulus E#curve.p, the prime base of the finite field that the elliptic curve is defined over.
     [V1, V2, V3, V4, V5] =
-        [5, 7, 11, 13, 17],
+        [5, 7, 11, 13, 15],
     V = [V1, V2, V3, V4, V5],
     C = commit(V, Ps, E),
     Proof = commit([V1, V2, V3, V5],
@@ -148,7 +152,7 @@ test(2) ->
     N = secp256k1:order(E),
     Ps = lists:map(fun(_) ->
                            secp256k1:gen_point(E)
-                   end, many(8)),
+                   end, range(1, 9)),
     V = [1,22,33,44,
          55,66,7,8],
     
@@ -214,15 +218,25 @@ test(3) ->
     V = range(10000, 10256),
     Ps = lists:map(fun(_) ->
                            secp256k1:gen_point(E)
-                   end, many(length(V))),
+                   end, range(1, 1+length(V))),
     S = 50,
-    BulletProof = make_bullet(V, Ps, E, S),
     io:fwrite("proving "),
     io:fwrite(integer_to_list(length(V))),
-    io:fwrite(" values with a proof of length "),
+    io:fwrite(" values.\n"),
+    T1 = os:timestamp(),
+    BulletProof = make_bullet(V, Ps, E, S),
+    io:fwrite("verifying proof of length "),
     io:fwrite(integer_to_list(length(BulletProof))),
     io:fwrite("\n"),
+    T2 = os:timestamp(),
     true = verify_bullet(V, Ps, E, BulletProof, S),
+    T3 = os:timestamp(),
+    io:fwrite("proving took "),
+    io:fwrite(float_to_list(timer:now_diff(T2, T1)/1000000)),
+    io:fwrite("\n"),
+    io:fwrite("verifying took "),
+    io:fwrite(float_to_list(timer:now_diff(T3, T2)/1000000)),
+    io:fwrite("\n"),
     success.
     
 

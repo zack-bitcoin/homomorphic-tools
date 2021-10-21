@@ -86,8 +86,7 @@ addition(P1, P2, E) ->
 %multiplication(infinity, _, _) ->
 %    infinity;
 multiplication(P1, 0, E) ->
-    io:fwrite("can't multiply by zero\n"),
-    error;
+    infinity;
 multiplication(P1, X, E) 
   when ((X rem 2) == 0) ->
     multiplication(addition(P1, P1, E),

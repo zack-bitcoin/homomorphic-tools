@@ -1,14 +1,41 @@
 -module(pedersen).
--export([make_bullet/4,
+-export([
+         %pedersen commitments
+         commit/3, verify/5,
+
+         %bullet proofs
+         make_bullet/4,
          verify_bullet/5,
+
+         %inner product arguments
+         make_ipa/6,
+         verify_ipa/6,
+
+         %finite field over exponents of the elliptic curve points.
+         fadd/3,fmul/3, fdot/3, fv_mul/3, fv_add/3,
+
+         %elliptic operations
+         add/3, mul/3, gen_point/1, basis/2,
+
          test/1]).
+%Uses Pedersen commitments to implement bullet proofs and inner product arguments.
+
+%pedersen commitments are a way to convert a plaintext value to a partially homomorphically encrypted value in the context of elgamal cryptosystem, which is homomorphic over addition.
+
+%bullet proofs are a way to convert a proof of an opening of a pedersen commitment from O(N) to O(2*log2(N)). Bullet proofs also hide intermediate values.
+
+%inner product arguments (ipa) is an application of bullet proofs in order to prove the correct execution of a dot product over committed values. It is possible to express any computation as an ipa, so this is an important tool to have.
+
+
 
 %finite field arithmetic modulus the group order of the elliptic curve.
 %for doing operations on the scalars that we use to multiply curve points.
-fadd(X, Y, E) when is_integer(X) ->
+fadd(X, Y, E) when (is_integer(X) and
+                    is_integer(Y)) ->
     N = order(E),
     (X + Y) rem N.
-fmul(X, Y, E) when is_integer(X) ->
+fmul(X, Y, E) when (is_integer(X) and
+                   is_integer(Y)) ->
     N = order(E),
     (X * Y) rem N.
 fdot([], [], E) -> 0;
@@ -19,15 +46,16 @@ fv_mul(_, [], _) -> [];
 fv_mul(S, [H|T], E) when is_integer(H) ->
     [fmul(S, H, E)|fv_mul(S, T, E)].
 fv_add(_, [], _) -> [];
-fv_add([A|AT], [B|BT], E) when is_integer(A) -> 
+fv_add([A|AT], [B|BT], E) 
+  when (is_integer(A) 
+       and is_integer(B)) -> 
     [fadd(A, B, E)|fv_add(AT, BT, E)].
     
 
 %elliptic curve operations.
 prime(E) ->
     secp256k1:field_prime(E).
-order(E) ->
-    secp256k1:order(E).
+order(E) -> secp256k1:order(E).
 gen_point(E) ->
     secp256k1:gen_point(E).
 add(X, Y, E) ->
@@ -50,10 +78,6 @@ v_mul(S, [H|T], E) ->
 %pedersen vector commit.
 commit([V1], [G1], E) ->
     mul(G1, V1, E);
-%commit([V1, V2], [G1, G2], E) ->
-%    add(mul(G1, V1, E),
-%        mul(G2, V2, E),
-%        E);
 commit(V, G, E) ->
     add(mul(hd(G), hd(V), E),
         commit(tl(V), tl(G), E),
@@ -149,7 +173,9 @@ range(N, N) -> [];
 range(A, B) when A < B -> 
     [A|range(A+1, B)].
 
-make_ipa(A, B, G, H, Q, E, X) ->
+make_ipa(A, B, G, H, Q, E) ->
+    % E is the elliptic curve
+
     %Inner Product Arguments
     
     %C = A*G + B*H + (A*B)q
@@ -167,6 +193,7 @@ make_ipa(A, B, G, H, Q, E, X) ->
              add(commit(B, H, E),
                  mul(Q, fdot(A, B, E), E),
                  E), E),
+    X = c_to_entropy(C1),
     {Cs, AN, BN, CN} = make_ipa2(C1, A, G, B, H, Q, E, [C1], X), 
     {commit(A, G, E),
      fdot(A, B, E),
@@ -223,17 +250,19 @@ fold_cs(X, Xi, [Cl, Cr|Cs], E) ->
           E),
       fold_cs(X, Xi, Cs, E),
       E).
-verify_ipa({AG, AB, Cs, AN, BN, CN}, 
-           B, X, G, H, Q, E) ->
-    %C3 = C2l*X + C2 + C2r*Xi
-       %= C1l*X + C2l*X + C1r*Xi + C2r*Xi + C1
+verify_ipa({AG, AB, Cs, AN, BN, CN}, %the proof
+           B, G, H, Q, E) ->
     N = order(E),
     C1 = hd(lists:reverse(Cs)),
     C1 = add(add(AG, commit(B, H, E), E), 
              mul(Q, AB, E), E),
+    X = c_to_entropy(C1),
+    
     Xi = basics:inverse(X, N),
     GN = get_gn(Xi, G, E),
     HN = get_gn(X, H, E),
+    %check that it is IPA format.
+    %CN = AN*GN + BN*HN + (AN*BN)q
     CN = add(add(mul(GN, AN, E),
                  mul(HN, BN, E),
                  E),
@@ -241,7 +270,22 @@ verify_ipa({AG, AB, Cs, AN, BN, CN},
              E),
     CN = fold_cs(X, Xi, Cs, E),
     true.
-    
+hash(X) when is_binary(X) ->
+    crypto:hash(sha256, X).
+c_to_entropy(C) ->
+    {C1a, C1b} = C,
+    <<X:256>> = hash(<<C1a:256, C1b:256>>),
+    X.
+
+basis(S, E) ->
+    G = lists:map(fun(_) ->
+                           gen_point(E)
+                   end, range(0, S)),
+    H = lists:map(fun(_) ->
+                           gen_point(E)
+                   end, range(0, S)),
+    Q = gen_point(E),
+    {G, H, Q}.
 
 test(1) ->
     %pedersen vector commitment
@@ -372,18 +416,11 @@ test(4) ->
     A = range(100, 108),
     S = length(A),
     B = range(200, 200 + S),
-    G = lists:map(fun(_) ->
-                           gen_point(E)
-                   end, range(0, S)),
-    H = lists:map(fun(_) ->
-                           gen_point(E)
-                   end, range(0, S)),
-    Q = gen_point(E),
+    {G, H, Q} = basis(S, E),
     C1 = add(commit(A, G, E),
              add(commit(B, H, E),
                  mul(Q, fdot(A, B, E), E),
                  E), E),
-
 
 
     S2 = S div 2,
@@ -418,31 +455,33 @@ test(4) ->
              add(commit(B2, H2, E),
                  mul(Q, fdot(A2, B2, E), E),
                  E), E),
-
     %C1 = A*G + B*H + (A*B)q
     %C2 = C1l*X + C1 + C1r*Xi
     %C3 = C2l*X + C2 + C2r*Xi
        %= C1l*X + C2l*X + C1r*Xi + C2r*Xi + C1
 
     %CN = AN*GN + BN*HN + (AN*BN)q
+    success;
+test(5) ->
+    %inner product with better syntax
 
+    A = range(100, 108),
+    S = length(A),
+    E = secp256k1:make(),
+    {G, H, Q} = basis(S, E),
     %publicly known:
     %G, H, Q
     %A*G is the publicly known commitment.
 
     %A*B is what we are trying to prove.
     % {A*G, A*B, [C1, C2, ... , CN], AN, BN, CN}
-    X = basics:inverse(2, N),
+    %X = basics:inverse(2, N),
     Bv = [0,0,0,1,1,0,0,0],%103+104 = 207
     Proof = make_ipa(
               A, Bv,%103+104 = 207
-              G, H, Q, E, X),
+              G, H, Q, E),
     {_, 207, _, _, _, _} = Proof,
     %io:fwrite(Proof),
-    true = verify_ipa(Proof, Bv, X, G, H, Q, E),
-    Proof,
-    success.
- 
-    
-    
-    
+    true = verify_ipa(Proof, Bv, G, H, Q, E),
+    Proof.
+%success;

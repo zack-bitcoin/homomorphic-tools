@@ -1,5 +1,6 @@
 -module(elliptic).
 -export([test/1, make/3, addition/3, 
+         det_pow/2,
          multiplication/3]).
 
 -record(curve, {a, b, g, n, p}).

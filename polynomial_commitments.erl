@@ -361,7 +361,6 @@ test(4) ->
     %l3 = l1 * l2 
     %r3 = r1 * r2
     %l3 = 1 * r3
-    %     public, private, intermediate
     %s = [one, l1,l2,l3, r1,r2,r3]
 
     %for this example, R=2
@@ -428,6 +427,7 @@ test(4) ->
                              mul_poly(A, B, Base)
                      end, [1], ZD0),
     H = div_poly(ZeroPoly, ZD, Base),
+    io:fwrite({H}),
 
     %sanity check.
     ZeroPoly = mul_poly(H, ZD, Base),
@@ -604,8 +604,8 @@ test(5) ->
              hd(Gs),
              pedersen:mul(hd(tl(tl(Gs))), 2, E),
              E)],
-    EAs2 = pedersen_encode(As, Gsd, E),%this seems wrong.
-    EAs2 = EAs,
+    EAs2 = pedersen_encode(As, Gsd, E),%NOT equal to EAs.
+    %EAs2 = EAs,
     %EAs2 = [pedersen:mul(hd(Gsd), hd(As), E),
     %        infinity],
     %hd(gsd) * hd(As) 
@@ -621,39 +621,191 @@ test(5) ->
     %        infinity],
 
     %io:fwrite({As, EAs, EAs2, EAs3}),
+    ok;
+test(6) -> 
+    %a cleaner zk proof
+    E = secp256k1:make(),
+    Base = secp256k1:order(E),
+    R = random:uniform(Base),
 
-    Asb = dot_polys_c(V, M0, Base),%2
-    EAsb = dot_polys_e(EV, M0, E),%2
-    Gsdb = dot_polys_e(Gs, M0, E),%2
-    %io:fwrite({Gs, Gsd}),
-    %io:fwrite({hd(Gs), Gsd}),
-    %io:fwrite({EAs, As, Gsd}),
-    %EAsc = pedersen_encode(As, Gsd, E), 
-    %EAsc = pedersen_encode(
-    %         As, [pedersen:add(hd(Gs), hd(Gs), E), infinity], E), 
-    %io:fwrite({As, Gsd, EAsc}),
-    %io:fwrite({As, Gsd, EAs, Asb, EAsb, Gsdb, EAsc}),
-    %EAs = EAsb,
-    Cd = pedersen:sum_up(EAs, E),
-    Cd = pedersen:commit(As, Gsd, E),
-    %Cd = pedersen:commit(As, Gsd, E),
-    %Cd = pedersen:commit(As, [hd(Gs), hd(Gs)], E),
+    %this time lets mix a list of 3 things.
+    % 5*7*11 = s1*s2*s3
 
-    %M2 = [[1,0],[0,1]],
-    M2 = [[0,1],[1,0], [0,0]],
-    M3 = [[1,0],[0,1], [0,0]],%???
-    As2 = dot_polys_c(V, M2, Base),
-    EAs2 = dot_polys_e(EV, M3, E),
-    EAs2b = dot_polys_e(EV, M2, E),
-    %io:fwrite({EAs2, EAs2b}),
-    %Gsd2 = matrix_application(M2, Gs, E),
-    Gsd2 = dot_polys_e(Gs, M2, E),
-    %Gsd2 = [pedersen:add(hd(Gs), hd(tl(Gs)), E),
-    %        hd(Gs)],
-    %io:fwrite({As2}),
-    Ce = pedersen:commit(As2, Gsd2, E),
-    Ce = pedersen:sum_up(EAs2, E),
-    Ce = pedersen:sum_up(EAs2b, E),
-
-    ok.
+    % s
+    % one = 1
+    % l1 = 5
+    % l2 = 7
+    % l3 = 11
+    % l4 = l1 * l2
+    % l5 = l3 * 14
+    % r1 = ?
+    % r2 = ?
+    % r3 = ?
+    % r4 = r1 * r2
+    % r5 = r3 * r4
     
+    S5 = sub(5, R, Base),
+    S7 = sub(7, R, Base),
+    S11 = sub(11, R, Base),
+    S35 = mul(S5, S7, Base),
+    S35_11 = mul(S35, S11, Base),
+    S55 = mul(S11, S5, Base),
+    Padding = [0,0,0,0,0],
+    PolyPadding = [[],[],[],[],[]],
+    S = [1, 
+         S5, S7, S11, S35, S35_11,
+         S11, S5, S7, S55, S35_11] 
+        ++ Padding,
+    16 = length(S),
+    %[one, 5, 7, 11, r4, r5, l1, l2, l3, l4, l5]
+    
+    %C = A dot B
+    %l4 = l1 * l2
+    %l5 = l3 * l4
+    %r4 = r1 * r2
+    %r5 = r3 * r4
+    %l5 = 1 * r5
+
+    %[one, 5, 7, 11, r4, r5, l1, l2, l3, l4, l5]
+    %l4 = l1 * l2
+    %[0,0,0,0,0,0,0,0,0,1,0] =
+    %[0,0,0,0,0,0,1,0,0,0,0] *
+    %[0,0,0,0,0,0,0,1,0,0,0]
+
+    %[one, 5, 7, 11, r4, r5, l1, l2, l3, l4, l5]
+    %l5 = l3 * l4
+    %[0,0,0,0,0,0,0,0,0,0,1] =
+    %[0,0,0,0,0,0,0,0,1,0,0] *
+    %[0,0,0,0,0,0,0,0,0,1,0]
+    
+    %[one, 5, 7, 11, r4, r5, l1, l2, l3, l4, l5]
+    %r4 = r1 * r2
+    %[0,0,0,0,1,0,0,0,0,0,0] =
+    %[0,1,0,0,0,0,0,0,0,0,0] *
+    %[0,0,1,0,0,0,0,0,0,0,0]
+
+    %[one, 5, 7, 11, r4, r5, l1, l2, l3, l4, l5]
+    %r5 = r3 * r4
+    %[0,0,0,0,0,1,0,0,0,0,0] =
+    %[0,0,0,0,1,0,0,0,0,0,0] *
+    %[0,0,0,1,0,0,0,0,0,0,0]
+
+    %[one, 5, 7, 11, r4, r5, l1, l2, l3, l4, l5]
+    %l5 = 1 * r5
+    %[0,0,0,0,0,0,0,0,0,0,1] =
+    %[1,0,0,0,0,0,0,0,0,0,0] *
+    %[0,0,0,0,0,1,0,0,0,0,0]
+
+    %A
+    %[0,0,0,0,0,0,1,0,0,0,0] 
+    %[0,0,0,0,0,0,0,0,1,0,0] 
+    %[0,1,0,0,0,0,0,0,0,0,0] 
+    %[0,0,0,0,1,0,0,0,0,0,0] 
+    %[1,0,0,0,0,0,0,0,0,0,0] 
+
+    %B
+    %[0,0,0,0,0,0,0,1,0,0,0]
+    %[0,0,0,0,0,0,0,0,0,1,0]
+    %[0,0,1,0,0,0,0,0,0,0,0]
+    %[0,0,0,1,0,0,0,0,0,0,0]
+    %[0,0,0,0,0,1,0,0,0,0,0]
+
+    %C
+    %[0,0,0,0,0,0,0,0,0,1,0] 
+    %[0,0,0,0,0,0,0,0,0,0,1] 
+    %[0,0,0,0,1,0,0,0,0,0,0] 
+    %[0,0,0,0,0,1,0,0,0,0,0] 
+    %[0,0,0,0,0,0,0,0,0,0,1] 
+
+    P0 = [0,0,0,0,0],
+    Ppair = evaluation_to_coefficient(
+              [0,1,0,0,1], Base),
+    P1 = evaluation_to_coefficient(
+              [1,0,0,0,0], Base),
+    P2 = evaluation_to_coefficient(
+              [0,1,0,0,0], Base),
+    P3 = evaluation_to_coefficient(
+              [0,0,1,0,0], Base),
+    P4 = evaluation_to_coefficient(
+              [0,0,0,1,0], Base),
+    P5 = evaluation_to_coefficient(
+              [0,0,0,0,1], Base),
+
+    PA = [P5, P3, P0, P0, P4, P0, P1, P0, P2, P0, P0] ++ PolyPadding,
+    PB = [P0, P0, P3, P4, P0, P5, P0, P1, P0, P2, P0] ++ PolyPadding,
+    PC = [P0, P0, P0, P0, P3, P4, P0, P0, P0, P1, Ppair] ++ PolyPadding,
+  
+    Padding2 = tl(tl(Padding)),
+    As = dot_polys_c(S, PA, Base) ++ Padding2,
+    Bs = dot_polys_c(S, PB, Base) ++ Padding2,
+    Cs = dot_polys_c(S, PC, Base) ++ Padding2,
+
+    MulAB = mul_poly(As, Bs, Base),
+    ZeroPoly = subtract_poly(MulAB, Cs, Base),
+    ZD0 = lists:map(
+            fun(R) ->
+                    base_polynomial(R, Base)
+            end, [1,2,3,4,5]),
+    ZD = lists:foldl(fun(A, B) ->
+                             mul_poly(A, B, Base)
+                     end, [1], ZD0),
+    H = div_poly(ZeroPoly, ZD, Base),
+    ZeroPoly = mul_poly(H, ZD, Base),
+    
+    {Gs, Hs, Q} = pedersen:basis(length(S), E),
+    CommitS = pedersen:commit(S, Gs, E),
+    CommitH = pedersen:commit(H, Hs, E),
+
+    <<Ran:256>> = pedersen:hash(
+          <<(pedersen:c_to_entropy(CommitS)):256,
+            (pedersen:c_to_entropy(CommitH)):256>>),
+
+    true = (mul(eval_poly(Ran, H, Base),
+                eval_poly(Ran, ZD, Base),
+                Base) ==
+                eval_poly(Ran, ZeroPoly, Base)),
+    true = (eval_poly(Ran, ZeroPoly, Base) ==
+                sub(mul(eval_poly(Ran, As, Base),
+                      eval_poly(Ran, Bs, Base), 
+                     Base),
+                    eval_poly(Ran, Cs, Base),
+                    Base)),
+
+    ES = pedersen_encode(S, Gs, E),
+    CommitS = pedersen:sum_up(ES, E),
+    EAs = dot_polys_e(ES, PA, E),
+    EBs = dot_polys_e(ES, PB, E),
+    ECs = dot_polys_e(ES, PC, E),
+
+    {Gs2, Hs2, Q2} = pedersen:basis(8, E),
+    Powers = powers(Ran, 8, Base),
+    %io:fwrite({As, Powers}),
+    ProofA = 
+        pedersen:make_ipa(
+          As, Powers,
+          Gs2, Hs2, Q2, E),
+    ProofB = 
+        pedersen:make_ipa(
+          Bs, Powers,
+          Gs2, Hs2, Q2, E),
+    ProofC = 
+        pedersen:make_ipa(
+          Cs, Powers,
+          Gs2, Hs2, Q2, E),
+    ProofH = 
+        pedersen:make_ipa(
+          lists:reverse(tl(tl(lists:reverse(H)))), Powers,
+          Gs2, Hs2, Q2, E),
+
+    true =
+        mul(element(2, ProofH),
+            eval_poly(Ran, ZD, Base),
+           Base) ==
+        sub(
+          mul(element(2, ProofA),
+              element(2, ProofB),
+              Base),
+          element(2, ProofC),
+          Base),
+
+    success.

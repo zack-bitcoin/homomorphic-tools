@@ -1,0 +1,7 @@
+looking at the zero knowledge proof that is test(4) of the polynomial commitments page.
+
+* clean it up, so it is clearer which parts are being done by the verifier and prover,
+
+* double check that we aren't leaking any private information.
+
+* There are some tricks we can do to make it faster. like using a compiled language for the elliptic curve, and switching to a curve that is optimized for speed.

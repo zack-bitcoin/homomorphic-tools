@@ -5,27 +5,23 @@
          on_curve/2]).
 
 -record(curve, {a, b, g, n, p}).
+field_prime(C) -> C#curve.p.
+order(C) -> C#curve.n.
 
 mod(X,Y)->(X rem Y + Y) rem Y.
 
-field_prime(C) ->
-    C#curve.p.
-
-order(C) ->
-    C#curve.n.
-
 on_curve({X, Y}, C) ->
-    #curve{
-          a = A,
-          b = B,
-          p = P
+    #curve{a = A, b = B, p = P
          } = C,
     on_curve(A, B, X, Y, P).
 on_curve(A, B, X, Y, P) ->
     %check that the point is on the curve.
     %y^2 = x^3 + A*x + B
-    0 == mod((X*X*X) + (A*X) + B - (Y*Y), P).
-    
+    0 == mod(mod(mod(X*X, P)*X, P) 
+             + mod(A*X, P) 
+             + B 
+             - mod(Y*Y, P), 
+             P).
 
 make(A, B, X, Y, P, N) ->
     #curve{a = A, b = B, g = {X, Y}, 

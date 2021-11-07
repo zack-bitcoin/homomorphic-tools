@@ -3,7 +3,7 @@
          mul_poly/2,
          lagrange_polynomials/1,
          test/1,
-         test/0]).
+         test2/1]).
 
 -record(encrypted, {commitment, value, blinding, g, h, e}).
 
@@ -60,7 +60,6 @@ mul(A, B) when (is_integer(A) and
 mul_list([], []) -> [];
 mul_list([S|ST], [G|GT]) -> 
     [mul(S, G)|
-    %[S*G|
      mul_list(ST, GT)].
 add_up([X]) -> X;
 add_up([A, B|T]) -> 
@@ -95,8 +94,8 @@ test(1) ->
 
     %A = [5, 7],
     E = secp256k1:make(),
-    G = pedersen:gen_point(E),
-    H = pedersen:gen_point(E),
+    %G = pedersen:gen_point(E),
+    %H = pedersen:gen_point(E),
     %(5 - r)*(7-r) = (hv1 - r)*(hv2 - r)
 
     %l1 = 5 - r -> 5 = l1 + r
@@ -115,62 +114,137 @@ test(1) ->
 
     %for this example, R=2
     %S plaintext
+    %Base = 22953686867719691230002707821868552601124472329079,
+    Base = secp256k1:order(E),
     UnblindedWitness = [1, 3, 5, 15, 5, 3, 15],
     [One, L1, L2, L3, R1, R2, R3] = UnblindedWitness,
+    S = UnblindedWitness,
+    %S = [51|tl(UnblindedWitness)],
     %if one, l1, and l2 are public, then we know that r1 and r2 are the same set.
     %(s dot a) * (s dot b) = (s dot c)
   %[0,1,0,0,0,0,0],[0,0,1,0,0,0,0],[0,0,0,1,0,0,0]
   %[0,0,0,0,1,0,0],[0,0,0,0,0,1,0],[0,0,0,0,0,0,1]
   %[1,0,0,0,0,0,0],[0,0,0,0,0,0,1],[0,0,0,1,0,0,0]
+    
+    %transform to polynomial syntax.
+    %7 sets of 3 order-3 polynomials
+
+    %A
+    %poly(0,0,1), poly(1,0,0), poly(0,0,0) ...
+    %
+    P001 = polynomial_commitments:
+        evaluation_to_coefficient(
+          [0,0,1], Base),
+    P100 = polynomial_commitments:
+        evaluation_to_coefficient(
+          [1,0,0], Base),
+    P000 = [0,0,0],
+    P010 = polynomial_commitments:
+        evaluation_to_coefficient(
+          [0,1,0], Base),
+    P101 = polynomial_commitments:
+        evaluation_to_coefficient(
+          [1,0,1], Base),
+    PA = [P001, P100, P000, P000, 
+          P010, P000, P000],
+    PB = [P000, P000, P100, P000, 
+          P000, P010, P001],
+    PC = [P000, P000, P000, P101, 
+          P000, P000, P010],
+
+    As = polynomial_commitments:
+        dot_polys_c(S, PA, Base),
+    Bs = polynomial_commitments:
+        dot_polys_c(S, PB, Base),
+    Cs = polynomial_commitments:
+        dot_polys_c(S, PC, Base),
+    MulAB = 
+        polynomial_commitments:
+        mul_poly(As, Bs, Base),
+
+    ZeroPoly = polynomial_commitments:
+        subtract_poly(
+          MulAB, Cs, Base),
+    Z2 = polynomial_commitments:
+        coefficient_to_evaluation(ZeroPoly, Base),
+    ZD0 = lists:map(fun(R) ->
+                           polynomial_commitments:
+                               base_polynomial(
+                                 R, Base)
+                   end, [1,2,3]),
+    ZD = lists:foldl(fun(A, B) ->
+                             polynomial_commitments:
+                                 mul_poly(
+                                   A, B, Base)
+                     end, [1], ZD0),
+    ZD2 = polynomial_commitments:
+        coefficient_to_evaluation(ZD, Base), 
+    H = polynomial_commitments:
+        div_poly(ZeroPoly, ZD, Base),
+        %div_poly_e(Z2, ZD2, Base),
+    ZeroPoly = polynomial_commitments:
+        mul_poly(H, ZD, Base),
+    
+
+    {H}.
+    %calculate polynomial
+    % A . s * B . s - C . s
+
+    %B
+    %poly(0,0,0), poly(0,0,0), ...
+    
+    %C
+    %poly(0,0,0), ...
+    
 
     %This is 9 inner products. We just need to compress them.
 
     %sum up
-    A = [1,1,0,0,1,0,0],%15
-    B = [0,0,1,0,0,1,1],%15^2
-    AB = [1,1,1,0,1,1,1],
-    C = [0,0,0,2,0,0,1],%15^3
+    %A = [1,1,0,0,1,0,0],%15
+    %B = [0,0,1,0,0,1,1],%15^2
+    %AB = [1,1,1,0,1,1,1],
+    %C = [0,0,0,2,0,0,1],%15^3
 
     %sanity check
-    true = ((list_pow(A, UnblindedWitness, E)
-            * list_pow(B, UnblindedWitness, E))
+    %true = ((list_pow(A, UnblindedWitness, E)
+    %        * list_pow(B, UnblindedWitness, E))
             %(list_pow(AB, UnblindedWitness, E)
-            == list_pow(C, UnblindedWitness, E)),
+    %        == list_pow(C, UnblindedWitness, E)),
 
     %lists
 
 
    
-    {Gs, Hs, _} = pedersen:basis(length(A), E),
+    %{Gs, Hs, _} = pedersen:basis(length(A), E),
 
-    Witness = 
-        [encrypt(One, G, H, E),
-         encrypt(L1, G, H, E),
-         encrypt(L2, G, H, E),
-         encrypt(L3, G, H, E),
-         encrypt(R1, G, H, E),
-         encrypt(R2, G, H, E),
-         encrypt(R3, G, H, E)],
-    [EOne, EL1, EL2, EL3, ER1, ER2, ER3] = Witness,
-    Af = dot(A, Witness),
-    Bf = dot(B, Witness),
-    Cf = dot(C, Witness),
-    true = ((Af#encrypted.value * 
-                 Bf#encrypted.value)
-            == Cf#encrypted.value),
+    %Witness = 
+    %    [encrypt(One, G, H, E),
+    %     encrypt(L1, G, H, E),
+    %     encrypt(L2, G, H, E),
+    %     encrypt(L3, G, H, E),
+    %     encrypt(R1, G, H, E),
+    %     encrypt(R2, G, H, E),
+    %     encrypt(R3, G, H, E)],
+    %[EOne, EL1, EL2, EL3, ER1, ER2, ER3] = Witness,
+    %Af = dot(A, Witness),
+    %Bf = dot(B, Witness),
+    %Cf = dot(C, Witness),
+    %true = ((Af#encrypted.value * 
+    %             Bf#encrypted.value)
+    %        == Cf#encrypted.value),
 
 
 
 
     %verification
-    true = check(EOne),
-    true = check(EL1),
-    true = check(EL2),
+    %true = check(EOne),
+    %true = check(EL1),
+    %true = check(EL2),
     
     
     
 
-    success;
+    %success;
 
 
     %pi_i (A1_i - Challenge) = pi_i (A2_i - Challenge)
@@ -185,18 +259,6 @@ test(1) ->
 %a*x + b*y + c*z ... = 0
     %ok.
 
-test(2) ->
-    % 2 * 3 = 6
-    % 4 * 5 =  20
-    % 7 * 10 = 70
-    % 2 * 5 = 10
-    
-    A = [2, 4, 7, 2],
-    B = [3, 5, 10, 5],
-    C = [6, 20, 70, 10],
-    
-
-    ok.
 
 det_pow(_, 0) -> 1;
 det_pow(0, _) -> 0;
@@ -273,6 +335,7 @@ lagrange_polynomial(R2, Many, N) ->
     D = lists:foldl(fun(X, A) ->
                             X * A
                     end, 1, Ds),
+    %D = (1 - X)*(2 - X)* ... (N - X)
     if
         D > 0 -> {P, D};
         true -> {mul_poly_c(-1, P), -D}
@@ -298,22 +361,26 @@ coefficient_to_evaluation(L, M) ->
     lists:map(fun(X) -> eval_poly(X, L) end, R).
 evaluation_to_coefficient(L) ->
     R = range(0, length(L)),
-    L2 = lagrange_polynomials(length(L)),
+    LP = lagrange_polynomials(length(L)),
     GCD = lists:foldl(fun({_, X}, A) ->
                              basics:gcd_euclid(X, A)
-                     end, 1, L2),
+                     end, 1, LP),
     Pi = lists:foldl(fun({_, X}, A) ->
                              X*A
-                     end, 1, L2),
+                     end, 1, LP),
     LCM = Pi div GCD,
+    %io:fwrite(LCM),
     L3 = lists:map(fun({P, D}) ->
                            M = LCM div D,
                            mul_poly_c(M, P)
-                   end, L2),
+                   end, LP),
+    %io:fwrite(L3),
     L4 = evaluation_to_coefficients2(L, L3),
+    %io:fwrite(L4),
     P = lists:foldl(fun(X, A) ->
                            add_poly(X, A)
                    end, [], L4),
+    %io:fwrite({LCM, P, L4}),
     Result = div_poly_c(LCM, P),
     remove_trailing_zeros(Result).
 evaluation_to_coefficients2([], []) -> [];
@@ -336,7 +403,7 @@ div_evaluation_polys([A|AT], [B|BT]) ->
     0 = A rem B,
     [A div B|div_evaluation_polys(AT, BT)].
 
-test() ->    
+test2(1) ->    
     C = [-3, 7, 2],
     E0 = coefficient_to_evaluation(C),
     E = coefficient_to_evaluation(C, 4),
@@ -355,13 +422,8 @@ test() ->
     E2 = coefficient_to_evaluation(C2, 3),
     E3 = coefficient_to_evaluation(C3),
     E3 = mul_list(E1, E2),
-    {E1, E2, E3}.
-    
-     
-    
-    
-
- 
-    
-    
-    
+    {E1, E2, E3};
+test2(2) -> 
+    %polynomial commitment.
+    %{coefficient_to_evaluation([2,-1,1]),
+    evaluation_to_coefficient([1,1,2]).

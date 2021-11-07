@@ -15,7 +15,9 @@
          fadd/3,fmul/3, fdot/3, fv_mul/3, fv_add/3,
 
          %elliptic operations
-         add/3, mul/3, gen_point/1, basis/2,
+         add/3, mul/3, gen_point/1, basis/2, sum_up/2,
+
+         c_to_entropy/1, hash/1,
 
          test/1]).
 %Uses Pedersen commitments to implement bullet proofs and inner product arguments.
@@ -53,14 +55,12 @@ fv_add([A|AT], [B|BT], E)
     
 
 %elliptic curve operations.
-prime(E) ->
-    secp256k1:field_prime(E).
+prime(E) -> secp256k1:field_prime(E).
 order(E) -> secp256k1:order(E).
-gen_point(E) ->
-    secp256k1:gen_point(E).
+gen_point(E) -> secp256k1:gen_point(E).
 add(X, Y, E) ->
     secp256k1:addition(X, Y, E).
-mul(X, Y, E) ->
+mul(X, Y, E) when is_integer(Y) ->
     secp256k1:multiplication(X, Y, E).
 sum_up(V, E) ->
     lists:foldl(fun(A, B) -> 
@@ -76,6 +76,8 @@ v_mul(S, [H|T], E) ->
      v_mul(S, T, E)].
 
 %pedersen vector commit.
+commit([], _, _) ->
+    infinity;
 commit([V1], [G1], E) ->
     mul(G1, V1, E);
 commit(V, G, E) ->
@@ -189,13 +191,14 @@ make_ipa(A, B, G, H, Q, E) ->
 
     %N = secp256k1:order(E),
     %S = length(A),
-    C1 = add(commit(A, G, E),
+    AG = commit(A, G, E),
+    C1 = add(AG, 
              add(commit(B, H, E),
                  mul(Q, fdot(A, B, E), E),
                  E), E),
     X = c_to_entropy(C1),
     {Cs, AN, BN, CN} = make_ipa2(C1, A, G, B, H, Q, E, [C1], X), 
-    {commit(A, G, E),
+    {AG,
      fdot(A, B, E),
      Cs, AN, BN, CN}.
 make_ipa2(C1, A, G, B, H, Q, E, Cs, X) ->
@@ -477,11 +480,17 @@ test(5) ->
     % {A*G, A*B, [C1, C2, ... , CN], AN, BN, CN}
     %X = basics:inverse(2, N),
     Bv = [0,0,0,1,1,0,0,0],%103+104 = 207
+    Bv2 = [1,0,0,0,0,1,0,0],%100+105 = 205
     Proof = make_ipa(
               A, Bv,%103+104 = 207
               G, H, Q, E),
     {_, 207, _, _, _, _} = Proof,
-    %io:fwrite(Proof),
+
+    Proof2 = make_ipa(
+              A, Bv2,%103+104 = 207
+              G, H, Q, E),
+    %io:fwrite(Proof)
     true = verify_ipa(Proof, Bv, G, H, Q, E),
+    true = verify_ipa(Proof2, Bv2, G, H, Q, E),
     Proof.
 %success;

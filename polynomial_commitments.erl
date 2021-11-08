@@ -197,6 +197,7 @@ mul_poly_e([A|AT], [B|BT], Base) ->
     
 
 all_zeros(0) -> [];
+all_zeros(N) when (N < 0) -> [];
 all_zeros(N) when (N > 0) -> 
     [0|all_zeros(N-1)].
 
@@ -219,21 +220,18 @@ lagrange_polynomials(Many, Base) ->
               end, R).
 lagrange_polynomial(R, Many, N, Base) ->
     R2 = remove_element(N, R),
-    Ps = lists:map(fun(X) ->
-                           base_polynomial(X, Base)
-                   end, R2),
-    P = lists:foldl(fun(X, A) ->
-                            mul_poly(X, A, Base)
-                    end, [1],
-                    Ps),
-    Ds = lists:map(fun(X) ->
-                           sub(N, X, Base)
-                               %N - X
-                   end, R2),
-    D = lists:foldl(fun(X, A) ->
-                            %X * A
-                            mul(X, A, Base)
-                    end, 1, Ds),
+    Ps = lists:map(
+           fun(X) -> base_polynomial(X, Base) end, 
+           R2),
+    P = lists:foldl(
+          fun(X, A) -> mul_poly(X, A, Base) end, 
+          [1], Ps),
+    Ds = lists:map(
+           fun(X) -> sub(N, X, Base) end, 
+           R2),
+    D = lists:foldl(
+          fun(X, A) -> mul(X, A, Base) end, 
+          1, Ds),
     div_poly_c(D, P, Base).
 coefficient_to_evaluation(L, Base) ->
     coefficient_to_evaluation(L, 0, Base).
@@ -243,18 +241,20 @@ coefficient_to_evaluation(L, M, Base) ->
     R = range(1, M2+1),
     lists:map(fun(X) -> eval_poly(X, L, Base) end, R).
 evaluation_to_coefficient(L, Base) ->
-    R = range(0, length(L)),
-    LP = lagrange_polynomials(length(L), Base),
-    L4 = evaluation_to_coefficients2(L, LP, Base),
+    Many = length(L),
+    R = range(0, Many),
+    LP = lagrange_polynomials(Many, Base),%we should memorize these.
+    L4 = evaluation_to_coefficients2(L, LP, Base, Many, 1),
     P = lists:foldl(fun(X, A) ->
                            add_poly(X, A, Base)
                    end, [], L4),
     remove_trailing_zeros(P).
-evaluation_to_coefficients2([], [], _) -> [];
+evaluation_to_coefficients2([], [], _, _, _) -> [];
 evaluation_to_coefficients2(
-  [I|IT], [P|PT], Base) ->
+  [I|IT], [P|PT], Base, Many, Counter) ->
+    %P = lagrange_polynomial(range(1, Many+1), Many, Counter, Base),
     [mul_poly_c(I, P, Base)|
-     evaluation_to_coefficients2(IT, PT, Base)].
+     evaluation_to_coefficients2(IT, PT, Base, Counter + 1, Many)].
 remove_leading_zeros([0|T]) ->
     remove_leading_zeros(T);
 remove_leading_zeros(X) -> X.
@@ -280,7 +280,78 @@ powers(X, N, Base) ->
 powers2(_, _, 0, _) -> [];
 powers2(X, A, N, Base) ->
     [A|powers2(X, mul(A, X, Base), N-1, Base)].
+  
+one_polynomial(Many, 0) -> 
+    [1|many(0, Many-1)];
+one_polynomial(Many, Position) -> 
+    [0|one_polynomial(Many-1, Position-1)].
+one_one_polynomials(N, N, _) -> [];
+one_one_polynomials(L, N, Base) -> 
+    E2C = fun(A) -> evaluation_to_coefficient(
+                      A, Base) end,
+    [E2C(one_polynomial(L, N))|
+     one_one_polynomials(L, N+1, Base)].
+
+shuffle_matrices(N, Base) ->
+    %shuffling N values requires order (2N+1) polynomials.
+    %shuffling N values requires 4n - 1 many polynomials per matrix.
+
+    %example for N=3, shuffling 5, 7, and 11.
+    %[5, 7, 11, r4, r5, l1, l2, l3, l4, l5, one]
+    %[0, 1, 2,  3,  4,  5,  6,  7,  8,  9,  10 ]
+
+    %r4 = r1 * r2 -> 3 = 0 * 1
+    %r5 = r4 * r3 -> 4 = 3 * 2
+    %l4 = l1 * l2 -> 8 = 5 * 6
+    %l5 = l4 * l3 -> 9 = 8 * 7
+    %l5 = 1 * r5 -> 9 = 10 * 4
+
+    %A
+    %[1,0,0,0,0,0,0,0,0,0,0] 
+    %[0,0,0,1,0,0,0,0,0,0,0] 
+    %[0,0,0,0,0,1,0,0,0,0,0]
+    %[0,0,0,0,0,0,0,0,1,0,0]
+    %[0,0,0,0,0,0,0,0,0,0,1]
+
+    %example for N=4
+    % 5*7*11*13 = s1*s2*s3*s4
+    %[5, 7, 11, 13, r5, r6, r7, l1, l2, l3, l4, l5, l6, l7, one]
+    %[0, 1, 2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14 ]
+    %r5 = r1 * r2 -> 4 = 0 * 1
+    %r6 = r5 * r3 -> 5 = 4 * 2
+    %r7 = r6 * r4 -> 6 = 5 * 3
+    %l5 = l1 * l2 -> 11= 7 * 8
+    %l6 = l5 * l3 -> 12= 11* 9
+    %l7 = l6 * l4 -> 13= 12* 10
+    %l7 = 1 *  r7 -> 13= 14* 6
+
+
+    H = (2 * N) - 1,
+    W = (4 * N) - 1,
+    P0 = many(0, H),
+    E2C = fun(A) -> evaluation_to_coefficient(
+                      A, Base) end,
+    Ppair = E2C(tl(tl(P0)) ++ [1,1]),
+    PNs = one_one_polynomials(H, 0, Base),
+    {PN1, PNR} = lists:split(N-1, PNs),
+    {PN2, _} = lists:split(N-2, PNR),
+    C = many(P0, N) ++ PN1 ++ 
+        many(P0, N) ++ PN2 ++ [Ppair] ++ [P0],
+    {PNa1, PNRa} = lists:split(N-2, tl(PNs)),
+    {PNa2, PNRL} = lists:split(N-2, tl(PNRa)),
     
+    A = [hd(PNs)] ++ many(P0, N-1) ++ PNa1 ++ 
+        [P0] ++ [hd(PNRa)] ++ many(P0, N-1) ++
+        PNa2 ++ [P0] ++ PNRL,
+    {PNb1, PNRb} = lists:split(N-1, PNs),
+    {PNb2, PNLb} = lists:split(N-1, PNRb),
+    B = [P0] ++ PNb1 ++ many(P0, N-2) ++ PNLb ++
+        [P0] ++ PNb2 ++ many(P0, N),
+
+    Length = length(A),
+    Length = length(B),
+    Length = length(C),
+    {A, B, C}.
 
 
 test(1) ->
@@ -427,7 +498,7 @@ test(4) ->
                              mul_poly(A, B, Base)
                      end, [1], ZD0),
     H = div_poly(ZeroPoly, ZD, Base),
-    io:fwrite({H}),
+    %io:fwrite({H}),
 
     %sanity check.
     ZeroPoly = mul_poly(H, ZD, Base),
@@ -734,6 +805,8 @@ test(6) ->
     PA = [P5, P3, P0, P0, P4, P0, P1, P0, P2, P0, P0] ++ PolyPadding,
     PB = [P0, P0, P3, P4, P0, P5, P0, P1, P0, P2, P0] ++ PolyPadding,
     PC = [P0, P0, P0, P0, P3, P4, P0, P0, P0, P1, Ppair] ++ PolyPadding,
+    %{PA2, _, _} = shuffle_matrices(3, Base),
+    %io:fwrite({{PA, PA2}}),
   
     Padding2 = tl(tl(Padding)),
     As = dot_polys_c(S, PA, Base) ++ Padding2,
@@ -808,4 +881,162 @@ test(6) ->
           element(2, ProofC),
           Base),
 
+    success;
+test(7) -> 
+    %trying to automate stuff from test(6).
+    E = secp256k1:make(),
+    Base = secp256k1:order(E),
+    R = random:uniform(Base),
+
+    % 5*7*11 = s1*s2*s3
+
+    S5 = sub(5, R, Base),
+    S7 = sub(7, R, Base),
+    S11 = sub(11, R, Base),
+    S35 = mul(S5, S7, Base),
+    S35_11 = mul(S35, S11, Base),
+    S55 = mul(S11, S5, Base),
+    Padding = [0,0,0,0,0],
+    PolyPadding = [[],[],[],[],[]],
+    S = [S5, S7, S11, S35, S35_11,
+         S11, S5, S7, S55, S35_11, 1] 
+        ++ Padding,
+    16 = length(S),
+
+    Padding2 = tl(tl(Padding)),
+    {PA0, PB0, PC0} = shuffle_matrices(3, Base),
+    PA = PA0 ++ PolyPadding,
+    PB = PB0 ++ PolyPadding,
+    PC = PC0 ++ PolyPadding,
+    %io:fwrite({PA}),
+    As = dot_polys_c(S, PA, Base) ++ Padding2,
+    Bs = dot_polys_c(S, PB, Base) ++ Padding2,
+    Cs = dot_polys_c(S, PC, Base) ++ Padding2,
+    MulAB = mul_poly(As, Bs, Base),
+    ZeroPoly = subtract_poly(MulAB, Cs, Base),
+    ZD0 = lists:map(
+            fun(R) ->
+                    base_polynomial(R, Base)
+            end, [1,2,3,4,5]),
+    ZD = lists:foldl(fun(A, B) ->
+                             mul_poly(A, B, Base)
+                     end, [1], ZD0),
+    H = div_poly(ZeroPoly, ZD, Base),
+    ZeroPoly = mul_poly(H, ZD, Base),
+    success;
+test(8) -> 
+    %merging R1CS proofs
+    %https://vitalik.ca/general/2021/11/05/halo.html
+    
+    %for program with values S.
+    %correct execution implies: 
+    %(A dot S) * (B dot S) = (C dot S)
+
+    %new format
+    %(A dot S) * (B dot S) = E + u*(C dot S)
+    %if E = 0 and u = 1, this is a proof that conforms to the old format as well.
+
+    %given 2 proofs using the same matrices
+    %(A dot S1) * (B dot S1) - u1*(C dot S1) = E1
+    %(A dot S2) * (B dot S2) - u2*(C dot S2) = E2
+
+    %take random linear combination S3 = S1 + r*S2
+
+    %(A dot S3) * (B dot S3) - (u1 + r*u2)*(C dot S3)
+    %= E1 + r*r*E2 + 
+    %  r((A dot S1)*(B dot S2) + 
+    %    (A dot S2)*(B dot S1) -
+    %    u1*(C dot Z2) -
+    %    u2*(C dot Z1)
+    E = secp256k1:make(),
+    Base = secp256k1:order(E),
+    R = random:uniform(Base),
+    %R = 1,
+    % 5*7*11 = s1*s2*s3
+    S5 = sub(5, R, Base),
+    S7 = sub(7, R, Base),
+    S11 = sub(11, R, Base),
+    S35 = mul(S5, S7, Base),
+    S35_11 = mul(S35, S11, Base),
+    S55 = mul(S11, S5, Base),
+    S77 = mul(S11, S7, Base),
+    Padding = [0,0,0,0,0],
+    PolyPadding = [[],[],[],[],[]],
+    S = [S5, S7, S11, S35, S35_11,
+         S11, S5, S7, S55, S35_11, 1] 
+        ++ Padding,
+    S2 = [S5, S7, S11, S35, S35_11,
+         S11, S7, S5, S77, S35_11, 1] 
+        ++ Padding,
+    16 = length(S),
+    Padding2 = tl(tl(Padding)),
+    {PA0, PB0, PC0} = shuffle_matrices(3, Base),
+    PA = PA0 ++ PolyPadding,
+    PB = PB0 ++ PolyPadding,
+    PC = PC0 ++ PolyPadding,
+    ZD0 = lists:map(
+            fun(R) ->
+                    base_polynomial(R, Base)
+            end, [1,2,3,4,5]),
+    ZD = lists:foldl(fun(A, B) ->
+                             mul_poly(A, B, Base)
+                     end, [1], ZD0),
+    As1 = dot_polys_c(S, PA, Base) ++ Padding2,
+    Bs1 = dot_polys_c(S, PB, Base) ++ Padding2,
+    Cs1 = dot_polys_c(S, PC, Base) ++ Padding2,
+    MulAB1 = mul_poly(As1, Bs1, Base),
+    ZeroPoly1 = subtract_poly(MulAB1, Cs1, Base),
+    H1 = div_poly(ZeroPoly1, ZD, Base),
+    ZeroPoly1 = mul_poly(H1, ZD, Base),
+
+    As2 = dot_polys_c(S2, PA, Base) ++ Padding2,
+    Bs2 = dot_polys_c(S2, PB, Base) ++ Padding2,
+    Cs2 = dot_polys_c(S2, PC, Base) ++ Padding2,
+    MulAB2 = mul_poly(As2, Bs2, Base),
+    ZeroPoly2 = subtract_poly(MulAB2, Cs2, Base),
+    H2 = div_poly(ZeroPoly2, ZD, Base),
+    ZeroPoly2 = mul_poly(H2, ZD, Base),
+
+    R2 = random:uniform(Base),
+    %R2 = 1,
+    S3 = pedersen:fv_add(
+           S, 
+           pedersen:fv_mul(R2, S2, E),
+           E),
+
+    CrossFactor0 = 
+        subtract_poly(
+          add_poly(mul_poly(As1, Bs2, Base),
+                   mul_poly(As2, Bs1, Base),
+                   Base),
+          add_poly(Cs1, Cs2, Base),
+          %subtract_poly(Cs1, Cs2, Base),
+          Base),
+    CrossFactor = mul_poly_c(R2, CrossFactor0, Base),
+    As3 = dot_polys_c(S3, PA, Base) ++ Padding2,
+    Bs3 = dot_polys_c(S3, PB, Base) ++ Padding2,
+    Cs3 = dot_polys_c(S3, PC, Base) ++ Padding2,
+    MulAB3 = mul_poly(As3, Bs3, Base),
+
+    CrossFactor2 = 
+        add_poly(
+          add_poly(CrossFactor, ZeroPoly1, Base),
+          mul_poly_c(mul(R2, R2, Base),
+                     ZeroPoly2, Base),
+          Base),
+
+    ZeroPoly3 = subtract_poly(
+                  MulAB3, 
+                  mul_poly_c(R2+1, Cs3, Base), 
+                  Base),
+    [] = remove_trailing_zeros(
+           subtract_poly(ZeroPoly3,
+                         CrossFactor2, Base)),
+    H3 = div_poly(ZeroPoly3, ZD, Base),
+    ZeroPoly3 = mul_poly(H3, ZD, Base),
+    
+
+
     success.
+
+  

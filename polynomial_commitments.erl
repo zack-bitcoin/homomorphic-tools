@@ -11,7 +11,7 @@
          eval_poly/3
         ]).
 
--record(shuffle_proof, {s, h, a, b, c, u, e}).
+-record(shuffle_proof, {s, h, a, b, c, u, zp, r}).
 
 
 %basics:lrpow(B, E, N) B^E rem N
@@ -143,6 +143,8 @@ many(X, N) when (N > 0) ->
 
 
 %for coefficient form.
+mul_poly([], _B, Base) -> [];
+mul_poly(_, [], Base) -> [];
 mul_poly([A], B, Base) ->
     mul_poly_c(A, B, Base);
 mul_poly([A|AT], B, Base) ->
@@ -375,21 +377,28 @@ shuffle_fraction(S, PA, PB, PC, Base, ZD) ->
     %sanity check
     ZeroPoly1 = mul_poly(H1, ZD, Base),
     #shuffle_proof{h = H1, a = As1, b = Bs1, 
-                   s = S, c = Cs1, u = 1, 
-                   e = ZeroPoly1}.
+                   s = S, c = Cs1, u = 1, r = 1,
+                   zp = ZeroPoly1}.
 
 add_shuffles(
   P1 = #shuffle_proof{
     s = S1, a = As1, b = Bs1, c = Cs1, u = U1,
-    e = ZeroPoly1},
+    zp = ZeroPoly1, r = R1},
   P2 = #shuffle_proof{
     s = S2, a = As2, b = Bs2, c = Cs2, u = U2,
-    e = ZeroPoly2},
+    zp = ZeroPoly2, r = R2},
   PA, PB, PC, ZD, R, E
  ) when is_integer(R) ->
-    io:fwrite("add shuffles 0\n"),
+
+    %Z3 = Z1 + R*Z2
+    %(A dot Z3) * (B dot Z3) - (u1+ru2)*(C dot Z3) 
+    % = E1 + r*r*E2 + r*(
+    %    (A dot Z1)*(B dot Z2) + (A dot Z2)*(B dot Z2)
+    %    - u1*(C dot Z2) - u2*(C dot Z1))
+
+
     Base = secp256k1:order(E),
-    U3 = U1 + R*U2,
+    U3 = U1 + (R*U2),
     S3 = pedersen:fv_add(
            S1, 
            pedersen:fv_mul(R, S2, E),
@@ -399,7 +408,9 @@ add_shuffles(
           add_poly(mul_poly(As1, Bs2, Base),
                    mul_poly(As2, Bs1, Base),
                    Base),
-          add_poly(Cs1, Cs2, Base),
+          add_poly(mul_poly_c(U2, Cs1, Base), 
+                   mul_poly_c(U1, Cs2, Base), 
+                   Base),
           %subtract_poly(Cs1, Cs2, Base),
           Base),
     CrossFactor1 = mul_poly_c(R, CrossFactor0, Base),
@@ -408,28 +419,43 @@ add_shuffles(
     Bs3 = dot_polys_c(S3, PB, Base) ++ Padding2,
     Cs3 = dot_polys_c(S3, PC, Base) ++ Padding2,
     MulAB3 = mul_poly(As3, Bs3, Base),
-    E3 = 
+    ZeroPoly3a = 
         add_poly(
           add_poly(CrossFactor1, ZeroPoly1, Base),
           mul_poly_c(mul(R, R, Base),
                      ZeroPoly2, Base),
           Base),
+    %(A*B)-u*C=E
     ZeroPoly3 = subtract_poly(
                   MulAB3, 
-                  mul_poly_c(R+1, Cs3, Base), 
+                  mul_poly_c(U3, Cs3, Base), 
                   Base),
-    %ZeroPoly3 = E3,
+    %io:fwrite(integer_to_list(divide(1, 2, Base))),
     [] = remove_trailing_zeros(
            subtract_poly(ZeroPoly3,
-                         E3, Base)),
-    io:fwrite("add shuffles 4\n"),
-    H3 = div_poly(ZeroPoly3, ZD, Base),
-    io:fwrite("add shuffles 5\n"),
-    ZeroPoly3 = mul_poly(H3, ZD, Base),
+             %add_poly(ZeroPoly3, CrossFactor1, Base),
+                         ZeroPoly3a, Base)),
+
+    %H = zp / zd
+    %H3 = (zp - r*crossfactor - e1 - r*r*e2) / ZD
+    H3 = div_poly(subtract_poly(
+                    subtract_poly(ZeroPoly3, CrossFactor1, Base), 
+                    add_poly(ZeroPoly1, mul_poly_c(mul(R, R, Base), ZeroPoly2, Base), Base), 
+                    Base),
+                  ZD, Base),
+    ZeroPoly3 = add_poly(add_poly(CrossFactor1,
+                                  add_poly(
+                                    ZeroPoly1, mul_poly_c(mul(R, R, Base), ZeroPoly2, Base), 
+                                    Base),
+                                  Base),
+                         mul_poly(H3, ZD, Base),
+                         Base),
     
     #shuffle_proof{s = S3, a = As3, b = Bs3, 
                    c = Cs3, h = H3, u = U3, 
-                   e = E3}.
+                   r = R,
+                   zp = ZeroPoly3}.
+%maybe instead of e being crossfactor0 it should be zeropoly3 * H3 / R ?
         
         
 
@@ -1029,8 +1055,8 @@ test(8) ->
     %    u2*(C dot Z1)
     E = secp256k1:make(),
     Base = secp256k1:order(E),
-    %R = random:uniform(Base),
-    R = 1,
+    R = random:uniform(Base),
+    %R = 1,
     % 5*7*11 = s1*s2*s3
     S5 = sub(5, R, Base),
     S7 = sub(7, R, Base),
@@ -1076,8 +1102,8 @@ test(8) ->
     H2 = div_poly(ZeroPoly2, ZD, Base),
     ZeroPoly2 = mul_poly(H2, ZD, Base),
 
-    %R2 = random:uniform(Base),
-    R2 = 1,
+    R2 = random:uniform(Base),
+    %R2 = 1,
     S3 = pedersen:fv_add(
            S, 
            pedersen:fv_mul(R2, S2, E),
@@ -1128,6 +1154,7 @@ test(9) ->
     E = secp256k1:make(),
     Base = secp256k1:order(E),
     R = random:uniform(Base),
+    %R = 1,
     S5 = sub(5, R, Base),
     S7 = sub(7, R, Base),
     S35 = mul(S5, S7, Base),
@@ -1142,6 +1169,9 @@ test(9) ->
     S55 = mul(S11, S5, Base),
     S3 = [S11, S5, S55, S5, S11, S55, 1, 0],
 
+    S77 = mul(S11, S7, Base),
+    S4 = [S7, S11, S77, S7, S11, S77, 1, 0],
+
     {PA0, PB0, PC0} = shuffle_matrices(2, Base),
     PA = PA0 ++ [[]],
     PB = PB0 ++ [[]],
@@ -1154,15 +1184,17 @@ test(9) ->
                              mul_poly(A, B, Base)
                      end, [1], ZD0),
 
-    io:fwrite("test 9 0 \n"),
     H1 = shuffle_fraction(S, PA, PB, PC, Base, ZD),
     H2 = shuffle_fraction(S2, PA, PB, PC, Base, ZD),
     H3 = shuffle_fraction(S3, PA, PB, PC, Base, ZD),
+    H4 = shuffle_fraction(S4, PA, PB, PC, Base, ZD),
     
-    H4 = add_shuffles(H1, H2, PA, PB, PC, ZD, 1, E),
-    H5 = add_shuffles(H3, H4, PA, PB, PC, ZD, 1, E),
-    io:fwrite("test 9 2 \n"),
+    H5 = add_shuffles(H1, H2, PA, PB, PC, ZD, random:uniform(Base), E),
+    H6 = add_shuffles(H3, H4, PA, PB, PC, ZD, random:uniform(Base), E),
+    H7 = add_shuffles(H5, H6, PA, PB, PC, ZD, random:uniform(Base), E),
 
-    io:fwrite({H1, H4}),
-  
+    H8 = add_shuffles(H1, H2, PA, PB, PC, ZD, random:uniform(Base), E),
+    H9 = add_shuffles(H8, H3, PA, PB, PC, ZD, random:uniform(Base), E),
+    H10 = add_shuffles(H9, H4, PA, PB, PC, ZD, random:uniform(Base), E),
+
     success.

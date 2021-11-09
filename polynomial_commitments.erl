@@ -11,6 +11,9 @@
          eval_poly/3
         ]).
 
+-record(shuffle_proof, {s, h, a, b, c, u, e}).
+
+
 %basics:lrpow(B, E, N) B^E rem N
 
 mod(X,Y)->(X rem Y + Y) rem Y.
@@ -152,7 +155,10 @@ is_all_zeros([0|T]) ->
     is_all_zeros(T);
 is_all_zeros(_) -> false.
 
+
 div_poly(A, [1], _Base) -> A;
+%this isn't for ending the recursion, it is just handling a simple case.
+
 %div_poly([0|A], [0|B], Base) -> 
 %    div_poly(A, B, Base);
 %div_poly([0], _, _) -> [0];
@@ -162,11 +168,16 @@ div_poly(A, [1], _Base) -> A;
 %    fail;
 div_poly(A, B, Base) -> 
     D = length(A) - length(B),
-    %io:fwrite(D),
     AllZeros = is_all_zeros(A),
     if
-        AllZeros -> many(0, D+1);
+        AllZeros -> many(0, max(0, D+1));
         true ->
+            if
+                D < 0 ->
+                    io:fwrite({A, B}),
+                    ok;
+                true -> ok
+            end,
             %io:fwrite({A, B}),
             LA = hd(lists:reverse(A)),
             LB = hd(lists:reverse(B)),
@@ -178,6 +189,7 @@ div_poly(A, B, Base) ->
             A3 = lists:reverse(tl(lists:reverse(A2))),
     %io:fwrite({A, B, M, A2, A3}),
     %io:fwrite({A, BM2, A2}),
+            %io:fwrite({A3, B}),
             div_poly(A3, B, Base) ++ [M]
     end.
     
@@ -353,6 +365,73 @@ shuffle_matrices(N, Base) ->
     Length = length(C),
     {A, B, C}.
 
+shuffle_fraction(S, PA, PB, PC, Base, ZD) ->
+    As1 = dot_polys_c(S, PA, Base) ++ [0],
+    Bs1 = dot_polys_c(S, PB, Base) ++ [0],
+    Cs1 = dot_polys_c(S, PC, Base) ++ [0],
+    MulAB1 = mul_poly(As1, Bs1, Base),
+    ZeroPoly1 = subtract_poly(MulAB1, Cs1, Base),
+    H1 = div_poly(ZeroPoly1, ZD, Base),
+    %sanity check
+    ZeroPoly1 = mul_poly(H1, ZD, Base),
+    #shuffle_proof{h = H1, a = As1, b = Bs1, 
+                   s = S, c = Cs1, u = 1, 
+                   e = ZeroPoly1}.
+
+add_shuffles(
+  P1 = #shuffle_proof{
+    s = S1, a = As1, b = Bs1, c = Cs1, u = U1,
+    e = ZeroPoly1},
+  P2 = #shuffle_proof{
+    s = S2, a = As2, b = Bs2, c = Cs2, u = U2,
+    e = ZeroPoly2},
+  PA, PB, PC, ZD, R, E
+ ) when is_integer(R) ->
+    io:fwrite("add shuffles 0\n"),
+    Base = secp256k1:order(E),
+    U3 = U1 + R*U2,
+    S3 = pedersen:fv_add(
+           S1, 
+           pedersen:fv_mul(R, S2, E),
+           E),
+    CrossFactor0 = 
+        subtract_poly(
+          add_poly(mul_poly(As1, Bs2, Base),
+                   mul_poly(As2, Bs1, Base),
+                   Base),
+          add_poly(Cs1, Cs2, Base),
+          %subtract_poly(Cs1, Cs2, Base),
+          Base),
+    CrossFactor1 = mul_poly_c(R, CrossFactor0, Base),
+    Padding2 = [0],
+    As3 = dot_polys_c(S3, PA, Base) ++ Padding2,
+    Bs3 = dot_polys_c(S3, PB, Base) ++ Padding2,
+    Cs3 = dot_polys_c(S3, PC, Base) ++ Padding2,
+    MulAB3 = mul_poly(As3, Bs3, Base),
+    E3 = 
+        add_poly(
+          add_poly(CrossFactor1, ZeroPoly1, Base),
+          mul_poly_c(mul(R, R, Base),
+                     ZeroPoly2, Base),
+          Base),
+    ZeroPoly3 = subtract_poly(
+                  MulAB3, 
+                  mul_poly_c(R+1, Cs3, Base), 
+                  Base),
+    %ZeroPoly3 = E3,
+    [] = remove_trailing_zeros(
+           subtract_poly(ZeroPoly3,
+                         E3, Base)),
+    io:fwrite("add shuffles 4\n"),
+    H3 = div_poly(ZeroPoly3, ZD, Base),
+    io:fwrite("add shuffles 5\n"),
+    ZeroPoly3 = mul_poly(H3, ZD, Base),
+    
+    #shuffle_proof{s = S3, a = As3, b = Bs3, 
+                   c = Cs3, h = H3, u = U3, 
+                   e = E3}.
+        
+        
 
 test(1) ->
     Base = 19,
@@ -950,8 +1029,8 @@ test(8) ->
     %    u2*(C dot Z1)
     E = secp256k1:make(),
     Base = secp256k1:order(E),
-    R = random:uniform(Base),
-    %R = 1,
+    %R = random:uniform(Base),
+    R = 1,
     % 5*7*11 = s1*s2*s3
     S5 = sub(5, R, Base),
     S7 = sub(7, R, Base),
@@ -997,8 +1076,8 @@ test(8) ->
     H2 = div_poly(ZeroPoly2, ZD, Base),
     ZeroPoly2 = mul_poly(H2, ZD, Base),
 
-    R2 = random:uniform(Base),
-    %R2 = 1,
+    %R2 = random:uniform(Base),
+    R2 = 1,
     S3 = pedersen:fv_add(
            S, 
            pedersen:fv_mul(R2, S2, E),
@@ -1032,11 +1111,58 @@ test(8) ->
     [] = remove_trailing_zeros(
            subtract_poly(ZeroPoly3,
                          CrossFactor2, Base)),
-    H3 = div_poly(ZeroPoly3, ZD, Base),
-    ZeroPoly3 = mul_poly(H3, ZD, Base),
+    io:fwrite("before\n"),
+    H3 = div_poly(
+           subtract_poly(ZeroPoly3, CrossFactor, Base),
+           ZD, Base),
+    io:fwrite("after\n"),
+    ZeroPoly3 = add_poly(CrossFactor, 
+                         mul_poly(H3, ZD, Base),
+                         Base),
+
+    %todo. find out exactly what we need to send to verify this proof.
+
+    success;
+test(9) -> 
+    %It seems like we only want to shuffle 2 things at a time, and then merge all the resultant tiny proofs. So this test is to go through that process.
+    E = secp256k1:make(),
+    Base = secp256k1:order(E),
+    R = random:uniform(Base),
+    S5 = sub(5, R, Base),
+    S7 = sub(7, R, Base),
+    S35 = mul(S5, S7, Base),
+
+    S = [S5, S7, S35, S7, S5, S35, 1, 0],
     
+    S11 = sub(11, R, Base),
+    S13 = sub(13, R, Base),
+    S143 = mul(S11, S13, Base),
+    S2 = [S11, S13, S143, S11, S13, S143, 1, 0],
 
+    S55 = mul(S11, S5, Base),
+    S3 = [S11, S5, S55, S5, S11, S55, 1, 0],
 
-    success.
+    {PA0, PB0, PC0} = shuffle_matrices(2, Base),
+    PA = PA0 ++ [[]],
+    PB = PB0 ++ [[]],
+    PC = PC0 ++ [[]],
+    ZD0 = lists:map(
+            fun(R) ->
+                    base_polynomial(R, Base)
+            end, [1,2,3]),
+    ZD = lists:foldl(fun(A, B) ->
+                             mul_poly(A, B, Base)
+                     end, [1], ZD0),
 
+    io:fwrite("test 9 0 \n"),
+    H1 = shuffle_fraction(S, PA, PB, PC, Base, ZD),
+    H2 = shuffle_fraction(S2, PA, PB, PC, Base, ZD),
+    H3 = shuffle_fraction(S3, PA, PB, PC, Base, ZD),
+    
+    H4 = add_shuffles(H1, H2, PA, PB, PC, ZD, 1, E),
+    H5 = add_shuffles(H3, H4, PA, PB, PC, ZD, 1, E),
+    io:fwrite("test 9 2 \n"),
+
+    io:fwrite({H1, H4}),
   
+    success.

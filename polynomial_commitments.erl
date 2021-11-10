@@ -11,7 +11,7 @@
          eval_poly/3
         ]).
 
--record(shuffle_proof, {s, h, a, b, c, u, zp, r}).
+-record(shuffle_proof, {s, h, a, b, c, u = 1, zp, r = 1, cross_factor}).
 
 
 %basics:lrpow(B, E, N) B^E rem N
@@ -176,6 +176,7 @@ div_poly(A, B, Base) ->
         true ->
             if
                 D < 0 ->
+                    io:fwrite("impossible division\n"),
                     io:fwrite({A, B}),
                     ok;
                 true -> ok
@@ -378,15 +379,16 @@ shuffle_fraction(S, PA, PB, PC, Base, ZD) ->
     ZeroPoly1 = mul_poly(H1, ZD, Base),
     #shuffle_proof{h = H1, a = As1, b = Bs1, 
                    s = S, c = Cs1, u = 1, r = 1,
-                   zp = ZeroPoly1}.
+                   zp = ZeroPoly1,
+                   cross_factor = []}.
 
 add_shuffles(
   P1 = #shuffle_proof{
     s = S1, a = As1, b = Bs1, c = Cs1, u = U1,
-    zp = ZeroPoly1, r = R1},
+    zp = ZeroPoly1, r = R1, cross_factor = CRA},
   P2 = #shuffle_proof{
     s = S2, a = As2, b = Bs2, c = Cs2, u = U2,
-    zp = ZeroPoly2, r = R2},
+    zp = ZeroPoly2, r = R2, cross_factor = CRB},
   PA, PB, PC, ZD, R, E
  ) when is_integer(R) ->
 
@@ -430,33 +432,93 @@ add_shuffles(
                   MulAB3, 
                   mul_poly_c(U3, Cs3, Base), 
                   Base),
+
+    % zp1 + r*cf + r*r*zp2 = a3*b3 - u3c3
+
     %io:fwrite(integer_to_list(divide(1, 2, Base))),
     [] = remove_trailing_zeros(
            subtract_poly(ZeroPoly3,
              %add_poly(ZeroPoly3, CrossFactor1, Base),
                          ZeroPoly3a, Base)),
 
+    %zp3 = zp1 + r*cf + r*r*zp2
+
     %H = zp / zd
     %H3 = (zp - r*crossfactor - e1 - r*r*e2) / ZD
-    H3 = div_poly(subtract_poly(
-                    subtract_poly(ZeroPoly3, CrossFactor1, Base), 
-                    add_poly(ZeroPoly1, mul_poly_c(mul(R, R, Base), ZeroPoly2, Base), Base), 
-                    Base),
-                  ZD, Base),
-    ZeroPoly3 = add_poly(add_poly(CrossFactor1,
-                                  add_poly(
-                                    ZeroPoly1, mul_poly_c(mul(R, R, Base), ZeroPoly2, Base), 
-                                    Base),
-                                  Base),
-                         mul_poly(H3, ZD, Base),
-                         Base),
-    
+    %H3 = (zp3 - r*cf - (r1*cfa) - r*r*r2*cfb) / ZD
+    %zp3 = h3 * ZD + r*cf + r1*cfa + r*r*r2*cfb
+    %H3 = div_poly(
+    %       subtract_poly(ZeroPoly3, CrossFactor1, Base),
+    %       ZD, Base),
+%    H3 = div_poly(
+%           subtract_poly(
+%            subtract_poly(ZeroPoly3, CrossFactor1, Base), 
+%             add_poly(mul_poly_c(R1, CRA, Base), 
+%                      mul_poly_c(mul(mul(R, R, Base), R2, Base), CRB, Base), 
+%                      Base),
+%             Base),
+%           ZD, Base),
+
+    CFNew = mul_poly_c(
+              basics:inverse(R, Base), 
+              add_poly(CrossFactor1,
+                       add_poly(mul_poly_c(R1, CRA, Base),
+                                mul_poly_c(mul(mul(R, R, Base), R2, Base), CRB, Base),
+                                Base),
+                       Base),
+              Base),
+    H3 = div_poly(subtract_poly(ZeroPoly3, mul_poly_c(R, CFNew, Base), Base), ZD, Base),
+
+    %(A*B)-u*C=E
+    false = [] == remove_trailing_zeros(H3),
+    %io:fwrite({H3, ZD, mul_poly(H3, ZD, Base)}),
+    ZeroPoly3 = 
+        add_poly(
+          add_poly(
+            mul_poly(H3, ZD, Base),
+            CrossFactor1, Base),
+          add_poly(mul_poly_c(R1, CRA, Base), 
+                   mul_poly_c(mul(mul(R, R, Base), R2, Base), CRB, Base), 
+                   Base),
+         Base),
+
     #shuffle_proof{s = S3, a = As3, b = Bs3, 
                    c = Cs3, h = H3, u = U3, 
-                   r = R,
-                   zp = ZeroPoly3}.
-%maybe instead of e being crossfactor0 it should be zeropoly3 * H3 / R ?
-        
+                   r = R, zp = ZeroPoly3, 
+                   cross_factor = CFNew}.
+verify_shuffle(
+  #shuffle_proof{
+     s = S, a = A, b = B, c = C, h = H, u = U,
+     r = R, zp = ZP, cross_factor = CF}, Base) ->
+    Ran = random:uniform(Base),
+    ZD0 = lists:map(
+            fun(R) ->
+                    base_polynomial(R, Base)
+            end, [1,2,3]),
+    ZD = lists:foldl(fun(A, B) ->
+                             mul_poly(A, B, Base)
+                     end, [1], ZD0),
+
+    %H = div_poly(
+    %      subtract_poly(
+    %        subtract_poly(ZeroPoly3, 
+
+    H = div_poly(subtract_poly(ZP, mul_poly_c(R, CF, Base), Base), ZD, Base),
+    
+%    true = mul(eval_poly(Ran, H, Base),
+%               eval_poly(Ran, ZD, Base),
+%               Base) == 
+%        sub(mul(eval_poly(Ran, A, Base),
+%                eval_poly(Ran, B, Base),
+%                Base),
+%            mul_poly_c(U, 
+%                       eval_poly(Ran, C, Base), 
+%                       Base),
+%            Base),
+    
+
+
+    ok. 
         
 
 test(1) ->
@@ -1185,7 +1247,9 @@ test(9) ->
                      end, [1], ZD0),
 
     H1 = shuffle_fraction(S, PA, PB, PC, Base, ZD),
+    %true = verify_shuffle(H1, Base),
     H2 = shuffle_fraction(S2, PA, PB, PC, Base, ZD),
+    %true = verify_shuffle(H2, Base),
     H3 = shuffle_fraction(S3, PA, PB, PC, Base, ZD),
     H4 = shuffle_fraction(S4, PA, PB, PC, Base, ZD),
     
@@ -1196,5 +1260,5 @@ test(9) ->
     H8 = add_shuffles(H1, H2, PA, PB, PC, ZD, random:uniform(Base), E),
     H9 = add_shuffles(H8, H3, PA, PB, PC, ZD, random:uniform(Base), E),
     H10 = add_shuffles(H9, H4, PA, PB, PC, ZD, random:uniform(Base), E),
-
+    ok = verify_shuffle(H10, Base),
     success.

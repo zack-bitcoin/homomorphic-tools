@@ -164,6 +164,11 @@ dot_polys_double([{G1, F1}|GT], [P|PT], E) ->
       dot_polys_double(GT, PT, E),
       E).
 
+mul_all([], [], _) -> [];
+mul_all([A|AT], [B|BT], Base) ->
+    [mul(A, B, Base)|
+     mul_all(AT, BT, Base)].
+
 pedersen_encode([], [], E) ->  [];
 pedersen_encode([], [H|T], E) -> 
     [infinity|pedersen_encode([], T, E)];
@@ -1380,6 +1385,8 @@ test(9) ->
     success;
 test(10) -> 
 
+    %todo. maybe this should be a 3-shuffle, because 3-shuffles also fit into a 16-element vector, so it wouldn't make the ipa proofs any slower.
+
     %accessing a variable without telling which one.
     %R1CS r 1 constraint systems explained here https://medium.com/@VitalikButerin/quadratic-arithmetic-programs-from-zero-to-hero-f6d558cea649
     % for a computation, rewrite using only +, -, *, /
@@ -1458,9 +1465,9 @@ test(10) ->
               [0,0,0,0], Base),
     
     %Paddingl = many(7, []),
-    PA = [P0, P0, P0, P1100, P1010, P0100, P0, P0001, P0],
-    PB = [P1100, P0, P0, P0, P0, P0010, P0, P0, P0001],
-    PC = [P0, P1000, P0100, P0, P0, P0, P0011, P0, P0],
+    PA = [P0,    P0,    P0,    P1100, P1010, P0100, P0,    P0001, P0],
+    PB = [P1100, P0,    P0,    P0,    P0,    P0010, P0,    P0,    P0001],
+    PC = [P0,    P1000, P0100, P0,    P0,    P0,    P0011, P0,    P0],
 
     As = dot_polys_c(US, PA, Base),
     Bs = dot_polys_c(US, PB, Base),
@@ -1507,24 +1514,16 @@ test(10) ->
                      Base),
                     eval_poly(Ran, Cs, Base),
                     Base)),
-    
-    %io:fwrite({length(US), length(Gs)}),
     S = pedersen_encode(US, Gs, E),
     RAs = dot_polys_e(PA, Ran, E),
     RBs = dot_polys_e(PB, Ran, E),
     RCs = dot_polys_e(PC, Ran, E),
-    As2 = lists:zipwith(fun(A, B) ->
-                                mul(A, B, Base)
-                        end, US, RAs),
-    Bs2 = lists:zipwith(fun(A, B) ->
-                                mul(A, B, Base)
-                        end, US, RBs),
-    Cs2 = lists:zipwith(fun(A, B) ->
-                                mul(A, B, Base)
-                        end, US, RCs),
-    %io:fwrite(length(As2)),
+    As2 = mul_all(US, RAs, Base),
+    Bs2 = mul_all(US, RBs, Base),
+    Cs2 = mul_all(US, RCs, Base),
     Padding = [0,0,0,0,0,0,0],
     V = [1,1,1,1,1,1,1,1,1] ++ Padding,
+
     ProofA = 
         pedersen:make_ipa(As2++Padding, V, Gs, Hs, Q, E),
     ProofB = 
@@ -1532,10 +1531,18 @@ test(10) ->
     ProofC = 
         pedersen:make_ipa(Cs2 ++ Padding, V, Gs, Hs, Q, E),
 
-    ProofH =
-        pedersen:make_ipa(H++[0], powers(Ran, 4, Base), Gs0, Hs0, Q, E),
     %they already know ZD, PA, PB, PC
-    %you send S, commitS, commitH, ProofA, ProofB, ProofC, ProofH
+    %you send 6 values from S, commitS, ProofA, ProofB, ProofC,
+    %It is better to send H instead of a commit or proof.
+    %6 values from S.
+    %1 value from commits
+    %proof has 1 commit, 1 int, 9 points, 2 ints, 1 point
+    %H is 3 ints.
+    %around 500 bytes per proof.
+    %io:fwrite({S, CommitS, ProofA, ProofB, ProofC, H}),
+    %io:fwrite(size(term_to_binary({S, CommitS, ProofA, ProofB, ProofC, H}))),
+    %around 1537 bytes.
+    
     io:fwrite("verifying.\n"),
     <<Ran:256>> = pedersen:hash(
           <<(pedersen:c_to_entropy(CommitS)):256,
@@ -1543,7 +1550,6 @@ test(10) ->
     true = pedersen:verify_ipa(ProofA, V, Gs, Hs, Q, E),
     true = pedersen:verify_ipa(ProofB, V, Gs, Hs, Q, E),
     true = pedersen:verify_ipa(ProofC, V, Gs, Hs, Q, E),
-    true = pedersen:verify_ipa(ProofH, powers(Ran, 4, Base), Gs0, Hs0, Q, E),
 
     CommitS = pedersen:sum_up(S, E),
     RAs = dot_polys_e(PA, Ran, E),
@@ -1564,8 +1570,8 @@ test(10) ->
                     Base),
                 element(2, ProofC),
                 Base) 
-            == mul(%eval_poly(Ran, H, Base),
-                 element(2, ProofH),
+            == mul(
+                 eval_poly(Ran, H, Base),
                  eval_poly(Ran, ZD, Base),
                  Base)),
     success.

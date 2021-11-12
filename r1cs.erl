@@ -165,8 +165,8 @@ test(1) ->
     ZeroPoly = polynomial_commitments:
         subtract_poly(
           MulAB, Cs, Base),
-    Z2 = polynomial_commitments:
-        coefficient_to_evaluation(ZeroPoly, Base),
+    %Z2 = polynomial_commitments:
+    %    coefficient_to_evaluation(ZeroPoly, Base),
     ZD0 = lists:map(fun(R) ->
                            polynomial_commitments:
                                base_polynomial(
@@ -177,43 +177,18 @@ test(1) ->
                                  mul_poly(
                                    A, B, Base)
                      end, [1], ZD0),
-    ZD2 = polynomial_commitments:
-        coefficient_to_evaluation(ZD, Base), 
+    %ZD2 = polynomial_commitments:
+    %    coefficient_to_evaluation(ZD, Base), 
     H = polynomial_commitments:
         div_poly(ZeroPoly, ZD, Base),
         %div_poly_e(Z2, ZD2, Base),
     ZeroPoly = polynomial_commitments:
         mul_poly(H, ZD, Base),
+
     
+
 
     {H}.
-    %calculate polynomial
-    % A . s * B . s - C . s
-
-    %B
-    %poly(0,0,0), poly(0,0,0), ...
-    
-    %C
-    %poly(0,0,0), ...
-    
-
-    %This is 9 inner products. We just need to compress them.
-
-    %sum up
-    %A = [1,1,0,0,1,0,0],%15
-    %B = [0,0,1,0,0,1,1],%15^2
-    %AB = [1,1,1,0,1,1,1],
-    %C = [0,0,0,2,0,0,1],%15^3
-
-    %sanity check
-    %true = ((list_pow(A, UnblindedWitness, E)
-    %        * list_pow(B, UnblindedWitness, E))
-            %(list_pow(AB, UnblindedWitness, E)
-    %        == list_pow(C, UnblindedWitness, E)),
-
-    %lists
-
-
    
     %{Gs, Hs, _} = pedersen:basis(length(A), E),
 
@@ -260,86 +235,6 @@ test(1) ->
     %ok.
 
 
-det_pow(_, 0) -> 1;
-det_pow(0, _) -> 0;
-det_pow(X, 1) -> X;
-det_pow(1, _) -> 1;
-det_pow(A, B) when (0 == (B rem 2)) -> 
-    det_pow(A*A, B div 2);
-det_pow(A, B) -> 
-    A*det_pow(A, B-1).
-
-range(A, A) -> [];
-range(A, B) when (A < B) -> 
-    [A|range(A+1, B)].
-
-eval_poly(X, L) -> 
-    eval_poly2(X, L, 0).
-eval_poly2(X, [], _) -> 0;
-eval_poly2(X, [H|T], N) -> 
-    (H*det_pow(X, N)) +
-        eval_poly2(X, T, N+1).
-
-add_poly([], []) -> [];
-add_poly([], X) -> X;
-add_poly(X, []) -> X;
-add_poly([A|AT], [B|BT]) ->
-    [(A+B)|add_poly(AT, BT)].
-
-mul_poly_c(_, []) -> [];
-mul_poly_c(S, [A|T]) when is_integer(S) -> 
-    [S*A|mul_poly_c(S, T)].
-
-div_poly_c(_, []) -> [];
-div_poly_c(S, [A|T]) -> 
-    0 = A rem S,
-    [A div S|div_poly_c(S, T)].
-
-mul_poly([A], B) ->
-    mul_poly_c(A, B);
-mul_poly([A|AT], B) ->
-    add_poly(mul_poly_c(A, B),
-             mul_poly(AT, [0|B])).
-
-
-all_zeros(0) -> [];
-all_zeros(N) when (N > 0) -> 
-    [0|all_zeros(N-1)].
-
-base_polynomial(Length, Intercept) ->
-    Rest = all_zeros(Length - 2),
-    [-Intercept, 1|Rest].
-
-remove_element(X, [X|T]) -> T;
-remove_element(X, [A|T]) -> 
-    [A|remove_element(X, T)].
-
-lagrange_polynomials(Many) ->
-    R = range(1, Many+1),
-    lists:map(fun(X) -> 
-                      R2 = remove_element(X, R),
-                      lagrange_polynomial(R2, Many, X)
-              end, R).
-    
-lagrange_polynomial(R2, Many, N) ->
-    Ps = lists:map(fun(X) ->
-                           base_polynomial(Many, X)
-                   end, R2),
-    P = lists:foldl(fun(X, A) ->
-                            mul_poly(X, A)
-                    end, [1],
-                    Ps),
-    Ds = lists:map(fun(X) ->
-                           N - X
-                   end, R2),
-    D = lists:foldl(fun(X, A) ->
-                            X * A
-                    end, 1, Ds),
-    %D = (1 - X)*(2 - X)* ... (N - X)
-    if
-        D > 0 -> {P, D};
-        true -> {mul_poly_c(-1, P), -D}
-    end.
              
 %coefficient format
 % f(x) = 4 + 3x - 2x*x -> [4, 3, -2]

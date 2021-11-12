@@ -9,7 +9,6 @@
          prime_factors/1,
          carmichael/1,
          carmichael_number/1,
-         inverse/2,
          test/0]).
 
 %Algorithms from the book "Partially Homomorphic Encryption", by Cetin Kaya Koc, Funda Ozdemir, and Zeynep Odemis Ozger.
@@ -73,6 +72,8 @@ to_bits_list(0) -> [];
 to_bits_list(N) ->
     B = N rem 2,
     [(N rem 2)|to_bits_list(N div 2)].
+lrpow(0, _, _) -> 0;
+lrpow(_, 0, _) -> 1;
 lrpow(B, E, N) ->
     % math:pow(B, E) rem N
     E2 = lists:reverse(
@@ -93,6 +94,8 @@ lrpow2(A, B, [H|T], N) ->
     lrpow2(A3, B, T, N).
 
 %now right to left
+rlpow(0, _, _) -> 0;
+rlpow(_, 0, _) -> 1;
 rlpow(B, E, N) ->
     % math:pow(B, E) rem N
     E2 = to_bits_list(E),

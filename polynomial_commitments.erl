@@ -17,6 +17,17 @@
 %basics:lrpow(B, E, N) B^E rem N
 
 mod(X,Y)->(X rem Y + Y) rem Y.
+symetric_view([], _) -> [];
+symetric_view([H|T], Y) ->
+    [symetric_view(H, Y)|
+     symetric_view(T, Y)];
+symetric_view(X, Y) ->
+    Y2 = Y div 2,
+    if
+        (X > Y2) -> X - Y;
+        true -> X
+    end.
+            
 pow(B, 0, _) -> 1;
 pow(B, E, N) ->
     basics:lrpow(B, E, N).
@@ -74,6 +85,14 @@ add_poly_encrypted([A|AT], [B|BT], E) ->
     [pedersen:add(A, B, E)|
      add_poly_encrypted(AT, BT, E)].
 
+add_poly_double([], BT, _) -> BT;
+add_poly_double(AT, [], _) -> AT;
+add_poly_double([{A, X}|AT], [{B, Y}|BT], E) ->
+    Base = secp256k1:order(E),
+    [{pedersen:add(A, B, E),
+      add(X, Y, Base)}|
+     add_poly_double(AT, BT, E)].
+
 %for evaluation form
 add_poly_e([], [], _) -> [];
 add_poly_e([A|AT], [B|BT], Base) ->
@@ -96,6 +115,14 @@ mul_poly_encrypted(_, [], _) -> [];
 mul_poly_encrypted(S, [A|T], E) -> 
     [pedersen:mul(S, A, E)|
      mul_poly_encrypted(S, T, E)].
+mul_poly_double(_, [], _) -> [];
+mul_poly_double({G, F}, [A|T], E) ->
+    Base = secp256k1:order(E),
+    [{pedersen:mul(G, A, E),
+      mul(F, A, Base)}|
+     mul_poly_double({G, F}, T, E)].
+    
+
 div_poly_c(_, [], _) -> [];
 div_poly_c(S, [A|T], Base) -> 
     %0 = A rem S,
@@ -105,22 +132,83 @@ div_poly_c(S, [A|T], Base) ->
 %for coefficient form, or evaluation in the case where the polynomials are the same length.
 dot_polys_c([], [], _Base) -> [];
 dot_polys_c([A|AT], [P|PT], Base) ->
+    %Plugging in an unblinded witness to a matrix of the circuit.
+    %S = [S1, S2, S3], PA = [[P11, P12, P13] ...
+    %[[S1 * P11, S1 * P12, S1 * P13], [S2 * P21 ...
+    %[[S1P11 + S2P21 + S3P31, S1P12 + ...
     add_poly(mul_poly_c(A, P, Base),
              dot_polys_c(AT, PT, Base),
              Base).
 %for encrypted mode. A is an elliptic point. P is a polynomial
-dot_polys_e([], [], _) -> [];
-dot_polys_e([A|AT], [P|PT], E) -> 
+%A is an encrypted witness value.
+dot_polys_e([], _, _) -> [];
+dot_polys_e([P|PT], R, E) ->
+    %Pluggining in the random R value we are using to check the blinded witness. It is using the R value to simplify one of the matrices of the circuit.
+    Base = secp256k1:order(E),
+    [eval_poly(R, P, Base)|
+     dot_polys_e(PT, R, E)].
+    
+        
+dot_polys_e_old([], [], _) -> [];
+dot_polys_e_old([A|AT], [P|PT], E) -> 
     add_poly_encrypted(
       mul_poly_encrypted(A, P, E),
-      dot_polys_e(AT, PT, E),
+      dot_polys_e_old(AT, PT, E),
       E).
 
-pedersen_encode(As, Gs, E) ->
+dot_polys_double([], [], E) -> [];
+dot_polys_double([{G1, F1}|GT], [P|PT], E) ->
+    Base = secp256k1:order(E),
+    add_poly_double(
+      mul_poly_double({G1, F1}, P, E),
+      dot_polys_double(GT, PT, E),
+      E).
+
+pedersen_encode([], [], E) ->  [];
+pedersen_encode([], [H|T], E) -> 
+    [infinity|pedersen_encode([], T, E)];
+pedersen_encode([A|As], [G|Gs], E) ->
+    [pedersen:mul(G, A, E)|
+     pedersen_encode(As, Gs, E)].
+pedersen_encode_double(As, Gs, R, E) ->
+    %{G_i, z^r}
+    Base = secp256k1:order(E),
+    EllipticPoints = 
+        lists:zipwith(
+          fun(G, A) ->
+                  pedersen:mul(G, A, E)
+          end, Gs, As),
+    Ints =
+        lists:zipwith(
+          fun(Z, A) -> mul(A, Z, Base) end, 
+          powers(R, length(As), Base), 
+          As),
+
     lists:zipwith(
-      fun(G, A) ->
-              pedersen:mul(G, A, E)
-      end, Gs, As).
+      fun(A, B) -> {A, B} end,
+      EllipticPoints, Ints).
+
+add_double({G1, I1}, {G2, I2}, E) ->
+    Base = secp256k1:order(E),
+    {pedersen:add(G1, G2, E),
+     add(I1, I2, Base)}.
+sum_up_double([{G, I}], _) ->
+    {G, I};
+sum_up_double([A, B|T], E) ->
+    sum_up_double(
+      [add_double(A, B, E)|T], 
+      E).
+
+sum_up_f([A], _) -> A;
+sum_up_f([A, B|T], Base) -> 
+    sum_up_f([add(A, B, Base)|T], Base).
+       
+
+mul_double(C, {G, I}, E) ->
+    Base = secp256k1:order(E),
+    {pedersen:mul(G, C, E),
+     mul(I, C, Base)}.
+              
     
 
 %matrix_application([], Gs, E) ->
@@ -375,12 +463,18 @@ shuffle_fraction(S, PA, PB, PC, Base, ZD) ->
     MulAB1 = mul_poly(As1, Bs1, Base),
     ZeroPoly1 = subtract_poly(MulAB1, Cs1, Base),
     H1 = div_poly(ZeroPoly1, ZD, Base),
-    %sanity check
-    ZeroPoly1 = mul_poly(H1, ZD, Base),
     #shuffle_proof{h = H1, a = As1, b = Bs1, 
                    s = S, c = Cs1, u = 1, r = 1,
                    zp = ZeroPoly1,
                    cross_factor = []}.
+
+%shuffle_fraction_encrypted(ES, PA, PB, PC, E, ZD) ->
+%    As1 = dot_polys_e(ES, PA, E) ++ [infinity],
+%    Bs1 = dot_polys_e(ES, PB, E) ++ [infinity],
+%    Cs1 = dot_polys_e(ES, PC, E) ++ [infinity],
+%    MulAB1 = mul_poly_encrypted(As1, Bs1, E),
+%    ok.
+    
 
 add_shuffles(
   P1 = #shuffle_proof{
@@ -399,6 +493,8 @@ add_shuffles(
     %    - u1*(C dot Z2) - u2*(C dot Z1))
 
 
+    %(A*B)-u*C=E
+
     Base = secp256k1:order(E),
     U3 = U1 + (R*U2),
     S3 = pedersen:fv_add(
@@ -413,7 +509,6 @@ add_shuffles(
           add_poly(mul_poly_c(U2, Cs1, Base), 
                    mul_poly_c(U1, Cs2, Base), 
                    Base),
-          %subtract_poly(Cs1, Cs2, Base),
           Base),
     CrossFactor1 = mul_poly_c(R, CrossFactor0, Base),
     Padding2 = [0],
@@ -438,40 +533,17 @@ add_shuffles(
     %io:fwrite(integer_to_list(divide(1, 2, Base))),
     [] = remove_trailing_zeros(
            subtract_poly(ZeroPoly3,
-             %add_poly(ZeroPoly3, CrossFactor1, Base),
                          ZeroPoly3a, Base)),
+    CFNew = add_poly(CrossFactor0,
+                     add_poly(mul_poly_c(mul(R1, basics:inverse(R, Base), Base), CRA, Base),
+                              mul_poly_c(mul(R, R2, Base), CRB, Base),
+                              Base),
+                     Base),
 
-    %zp3 = zp1 + r*cf + r*r*zp2
-
-    %H = zp / zd
-    %H3 = (zp - r*crossfactor - e1 - r*r*e2) / ZD
-    %H3 = (zp3 - r*cf - (r1*cfa) - r*r*r2*cfb) / ZD
-    %zp3 = h3 * ZD + r*cf + r1*cfa + r*r*r2*cfb
-    %H3 = div_poly(
-    %       subtract_poly(ZeroPoly3, CrossFactor1, Base),
-    %       ZD, Base),
-%    H3 = div_poly(
-%           subtract_poly(
-%            subtract_poly(ZeroPoly3, CrossFactor1, Base), 
-%             add_poly(mul_poly_c(R1, CRA, Base), 
-%                      mul_poly_c(mul(mul(R, R, Base), R2, Base), CRB, Base), 
-%                      Base),
-%             Base),
-%           ZD, Base),
-
-    CFNew = mul_poly_c(
-              basics:inverse(R, Base), 
-              add_poly(CrossFactor1,
-                       add_poly(mul_poly_c(R1, CRA, Base),
-                                mul_poly_c(mul(mul(R, R, Base), R2, Base), CRB, Base),
-                                Base),
-                       Base),
-              Base),
     H3 = div_poly(subtract_poly(ZeroPoly3, mul_poly_c(R, CFNew, Base), Base), ZD, Base),
+    false = [] == remove_trailing_zeros(H3),%sanity check.
 
-    %(A*B)-u*C=E
-    false = [] == remove_trailing_zeros(H3),
-    %io:fwrite({H3, ZD, mul_poly(H3, ZD, Base)}),
+    %sanity check.
     ZeroPoly3 = 
         add_poly(
           add_poly(
@@ -499,10 +571,6 @@ verify_shuffle(
                              mul_poly(A, B, Base)
                      end, [1], ZD0),
 
-    %H = div_poly(
-    %      subtract_poly(
-    %        subtract_poly(ZeroPoly3, 
-
     H = div_poly(subtract_poly(ZP, mul_poly_c(R, CF, Base), Base), ZD, Base),
     
 %    true = mul(eval_poly(Ran, H, Base),
@@ -515,10 +583,8 @@ verify_shuffle(
 %                       eval_poly(Ran, C, Base), 
 %                       Base),
 %            Base),
-    
 
-
-    ok. 
+    true. 
         
 
 test(1) ->
@@ -609,7 +675,7 @@ test(4) ->
     R = random:uniform(Base),
     Secret1 = sub(5, R, Base),
     Secret2 = sub(7, R, Base),
-    Secret3 = Secret1 * Secret2,
+    Secret3 = mul(Secret1, Secret2, Base),
     UnblindedWitness = 
         [1, Secret1, Secret2, 
          Secret3, Secret2, Secret1, Secret3],
@@ -674,7 +740,8 @@ test(4) ->
 
     {Gs, Hs, Q} = pedersen:basis(length(S)+1, E),
     CommitS = pedersen:commit(S++[0], Gs, E),
-    CommitH = pedersen:commit(H++[0], Hs, E),
+    CommitH = pedersen:commit(H, Gs, E),
+    %CommitH = pedersen:commit(H++[0], Hs, E),
     %commit to S.
     %commit to H. (ZeroPoly/ZD)
     %Choose an R based on those commitments.
@@ -682,6 +749,8 @@ test(4) ->
     <<Ran:256>> = pedersen:hash(
           <<(pedersen:c_to_entropy(CommitS)):256,
             (pedersen:c_to_entropy(CommitH)):256>>),
+    %Ran = 3,
+    %(pedersen:c_to_entropy(CommitH)):256>>),
     %check polynomials match with a random point
     true = (mul(eval_poly(Ran, H, Base),
                 eval_poly(Ran, ZD, Base),
@@ -698,92 +767,109 @@ test(4) ->
 
     %they already know ZD, PA, PB, PC
     %if you send an encoded version of S, they can calculate encoded versions of As, Bs, and Cs.
-    ES = lists:zipwith(
-           fun(G, A) ->
-                   pedersen:mul(G, A, E)
-           end, Gs, S++[0]),
-    CommitS = pedersen:sum_up(ES, E),
+    %ES = lists:zipwith(
+    %       fun(G, A) ->
+    %               pedersen:mul(G, A, E)
+    %       end, Gs, S++[0]),
     ES = pedersen_encode(S++[0], Gs, E),
-    EAs = dot_polys_e(ES, PA, E),
-    EBs = dot_polys_e(ES, PB, E),
-    ECs = dot_polys_e(ES, PC, E),
+    %DES = pedersen_encode_double(S++[0], Gs, Ran, E),
+    %ES = pedersen_encode(S++[0], Gs, E),
+    CommitS = pedersen:sum_up(ES, E),
+    %{CommitS, _Check} = sum_up_double(ES, E),
+    RAs = dot_polys_e(PA, Ran, E),
+    RBs = dot_polys_e(PB, Ran, E),
+    RCs = dot_polys_e(PC, Ran, E),
+    EAs = lists:zipwith(fun(A, B) ->
+                                pedersen:mul(A, B, E)
+                        end, ES, RAs),
+    EBs = lists:zipwith(fun(A, B) ->
+                                pedersen:mul(A, B, E)
+                        end, ES, RBs),
+    ECs = lists:zipwith(fun(A, B) ->
+                                pedersen:mul(A, B, E)
+                        end, ES, RCs),
 
-    %H(R) * ZD(R) = (As(R) * Bs(R)) - C(R)
+    %commit A.S with Gs
+    CommitA = pedersen:sum_up(EAs, E),
+    CommitB = pedersen:sum_up(EBs, E),
+    CommitC = pedersen:sum_up(ECs, E),
 
-    %CommitA = pedersen:sum_up(EAs, E),
 
 
-    {Gs2, Hs2, Q2} = pedersen:basis(4, E),
-    %io:fwrite({As, powers(Ran, length(As), Base), Gs2}),
+    %{CommitA, CommitB, _, _, _} = make_ipa(
+
+    As2 = lists:zipwith(fun(A, B) ->
+                                mul(A, B, Base)
+                        end, S ++ [0], RAs),
+    Bs2 = lists:zipwith(fun(A, B) ->
+                                mul(A, B, Base)
+                        end, S ++ [0], RBs),
+    Cs2 = lists:zipwith(fun(A, B) ->
+                                mul(A, B, Base)
+                        end, S ++ [0], RCs),
+    Powers8 = powers(Ran, 8, Base),
     ProofA = 
-        pedersen:make_ipa(
-          As++[0], powers(Ran, 4, Base),
-          Gs2, Hs2, Q2, E),
-    %io:fwrite({element(2, ProofA),
-    %           eval_poly(Ran, As, Base)}),
+        pedersen:make_ipa(As2, [1,1,1,1,1,1,1,1], Gs, Hs, Q, E),
+    CommitA = element(1, ProofA),
     ProofB = 
-        pedersen:make_ipa(
-          Bs++[0], powers(Ran, 4, Base),
-          Gs2, Hs2, Q2, E),
+        pedersen:make_ipa(Bs2, [1,1,1,1,1,1,1,1], Gs, Hs, Q, E),
+    CommitB = element(1, ProofB),
     ProofC = 
-        pedersen:make_ipa(
-          Cs++[0], powers(Ran, 4, Base),
-          Gs2, Hs2, Q2, E),
+        pedersen:make_ipa(Cs2, [1,1,1,1,1,1,1,1], Gs, Hs, Q, E),
+    CommitC = element(1, ProofC),
+    %true = (element(2, ProofB) == sum_up_f(Bs2, Base)),
 
-    ProofH = 
-        pedersen:make_ipa(
-          H ++ [0], powers(Ran, 4, Base),
-          Gs2, Hs2, Q2, E),
-          
-    true =
-        mul(element(2, ProofH),
-            eval_poly(Ran, ZD, Base),
-           Base) ==
-        sub(
-          mul(element(2, ProofA),
-              element(2, ProofB),
-              Base),
-          element(2, ProofC),
-          Base),
-
-    %io:fwrite({EAs, As}),
-    %CommitA2 = pedersen:commit(As, Gs, E),
-    %GAs = matrix_application(PA, Gs, E),
-    %CommitA2 = pedersen:commit(As, GAs, E),
-
-    %io:fwrite({%matrix_application(PA, Gs, E),
-    %           CommitA, CommitA2}),
-
-
-    %evaluate ECs(R), decrypt this.
-    %use an inner product argument to show that (A*B)(R) is the same value.
-
-
-    %they choose a random number R, and you need to use an inner product argument to show that C = A*B
-
-
-
-
-    %they choose a random number R, and you need to use an inner product argument to show that C = A*B.
-    % IPA format: C = A*G + B*H + (A*B)q
-    % A*G is the sum over the encoded As, evaluated at (r).
-    % B*H is the sum over the encoded Bs, evaluated at (r).
-    % (A*B)(r) is S dot PC evaluated at R.
-
-    %send a proof of (ZeroPoly/ZD)(r).
-    %send a proof of As(r) and Bs(r),
-    %they can calculate ZD(r).
-
-    %they check that ((A*B)(r) - As(r) - Bs(r))/(ZD(r)) == (ZeroPoly/ZD)(r)
+    true = (sub(mul(element(2, ProofA), 
+                       element(2, ProofB), 
+                       Base),
+                   element(2, ProofC),
+                  Base) == 
+                mul(eval_poly(Ran, H, Base),
+                    eval_poly(Ran, ZD, Base),
+                    Base)),
     
-    %so the only thing you need to send is C.
+    
+    %verifying the proof.
 
-    %they check that C = A*G(R) + B*H(R) + (A*B)q
+    %what we already knew: 
+    % E, the elliptic group. Base, its prime order.
+    % R, the random value we used to blind the R1CS matrix.
+    % PA, PB, PC
+    % zd. the basic polynomial with certain roots.
+    % Gs, Hs, Q, the group generator elements for doing pedersen commitments.
 
-    %H(x) = ZeroPoly(x)/ZD(x)
+    %what they sent:
+    % Commit S, to the witness, and ES, the encoded witness values.
+    % Commit H, to show the polynomial has certain roots.
+    % encrypted versions of R1, R2, and R3, which are part of the witness.
+    Secret1 = sub(5, R, Base),
+    Secret2 = sub(7, R, Base),
+    Secret3 = mul(Secret1, Secret2, Base),
+    S0 = [1, Secret1, Secret2, Secret3, 0, 0, 0, 0],
 
+    ES0 = pedersen_encode(S0, Gs, E),
+    {ES1, _} = lists:split(4, ES0),
+    {_, ES2} = lists:split(4, ES),
+    ES = ES1 ++ ES2,
+    %EAs = dot_polys_e(PA, R, E),
+    %EBs = dot_polys_e(PB, R, E),
+    %ECs = dot_polys_e(PC, R, E),
+    CommitS = pedersen:sum_up(ES, E),
 
-    {H, lists:nth(5, ES)};
+    %(pedersen:c_to_entropy(CommitH)):256>>),
+     
+    %CommitH = element(2, ProofH),
+
+    %CommitA = pedersen:commit(As++[0], Gs2, E),
+    %As = dot_polys_c(S ++ [0], PA, Base),
+
+    %ES = pedersen_encode(S++[0], Gs, E),
+    %EAs = dot_polys_e(ES, PA, E),
+
+    
+
+    success;
+
 test(5) -> 
     %checking that pedersen commitments are deterministic, no matter whether they are created directly, or via addition, or multiplication.
     %also checks that zipwith is using the same order as pedersen:commit.
@@ -821,11 +907,11 @@ test(5) ->
 
     %check dot_polys_e
     M1 = [[3,1],[0,0],[0,2]],
-    M0 = [[1,0],[0,0],[0,0]],
+    %M0 = [[1,0],[0,0],[0,0]],
     As = dot_polys_c(V, M1, Base),%2
     As = [hd(V) * 3,
           hd(V) + (hd(tl(tl(V))) * 2)],
-    EAs = dot_polys_e(EV, M1, E),%2
+    EAs = dot_polys_e(M1, 1, E),%2
     EAs = [pedersen:mul(hd(EV), 3, E),
            pedersen:add(hd(EV), 
                         pedersen:mul(hd(tl(tl(EV))), 2, E), 
@@ -836,13 +922,17 @@ test(5) ->
              pedersen:mul(hd(tl(tl(Gs))), 
                           hd(tl(tl(V))) * 2, E),
              E)],
-    Gsd = dot_polys_e(Gs, M1, E),%2
+    Gsd = dot_polys_e(M1, 1, E),%2
     Gsd = [pedersen:mul(hd(Gs), 3, E),
            pedersen:add(
              hd(Gs),
              pedersen:mul(hd(tl(tl(Gs))), 2, E),
              E)],
     EAs2 = pedersen_encode(As, Gsd, E),%NOT equal to EAs.
+    EAs2 = [pedersen:mul(hd(Gsd), hd(As), E), 
+            pedersen:mul(hd(tl(Gsd)), hd(tl(As)), E)],
+    %EAs2 = pedersen_encode(As, [hd(Gs), hd(tl(Gs))], E),%NOT equal to EAs.
+    %io:fwrite(EAs, EAs2),
     %EAs2 = EAs,
     %EAs2 = [pedersen:mul(hd(Gsd), hd(As), E),
     %        infinity],
@@ -1013,17 +1103,28 @@ test(6) ->
 
     ES = pedersen_encode(S, Gs, E),
     CommitS = pedersen:sum_up(ES, E),
-    EAs = dot_polys_e(ES, PA, E),
-    EBs = dot_polys_e(ES, PB, E),
-    ECs = dot_polys_e(ES, PC, E),
+
+    Padding3 = [infinity, infinity, infinity],
+    EAs = dot_polys_e(PA, Ran, E) ++ Padding3,
+    EBs = dot_polys_e(PB, Ran, E) ++ Padding3,
+    ECs = dot_polys_e(PC, Ran, E) ++ Padding3,
+    io:fwrite([As, EAs]),
+
 
     {Gs2, Hs2, Q2} = pedersen:basis(8, E),
+    %{Gs2, _} = lists:split(8, Gs),
+    %{Hs2, _} = lists:split(8, Hs),
+    %Q2 = Q,
     Powers = powers(Ran, 8, Base),
     %io:fwrite({As, Powers}),
     ProofA = 
         pedersen:make_ipa(
           As, Powers,
           Gs2, Hs2, Q2, E),
+    {CommitA, _, _, _, _, _} = ProofA,
+    %CommitAb = pedersen:commit(As, Gs, E),
+    CommitAb = pedersen:sum_up(EAs, E),
+    io:fwrite({CommitA, CommitAb}),
     ProofB = 
         pedersen:make_ipa(
           Bs, Powers,
@@ -1260,5 +1361,211 @@ test(9) ->
     H8 = add_shuffles(H1, H2, PA, PB, PC, ZD, random:uniform(Base), E),
     H9 = add_shuffles(H8, H3, PA, PB, PC, ZD, random:uniform(Base), E),
     H10 = add_shuffles(H9, H4, PA, PB, PC, ZD, random:uniform(Base), E),
-    ok = verify_shuffle(H10, Base),
+    lists:map(fun(X) ->
+                      true = 
+                          verify_shuffle(X, Base)
+              end, [H1, H2, H3, H4, H5,
+                    H6, H7, H8, H9, H10]),
+
+    %Next lets go through the process of proving H1, which is evidence for S. After that we can try doing a multi-proof.
+
+
+    {Gs, Hs, Q} = pedersen:basis(length(S), E),
+    CommitS = pedersen:commit(S, Gs, E),
+    CommitH = pedersen:commit(
+                H1#shuffle_proof.h, Hs, E),
+    <<Ran:256>> = pedersen:hash(
+          <<(pedersen:c_to_entropy(CommitS)):256>>),
+    
+    success;
+test(10) -> 
+
+    %accessing a variable without telling which one.
+    %R1CS r 1 constraint systems explained here https://medium.com/@VitalikButerin/quadratic-arithmetic-programs-from-zero-to-hero-f6d558cea649
+    % for a computation, rewrite using only +, -, *, /
+    % calculate all the intermediate values.
+    % find vector s and matrices a, b, and c such that (s dot a) * (s dot b) = (s dot c),
+    % vector s is the values being passed through the computation. It is a witness that the computation happened.
+    % some of the s values can be un-blinded to reveal aspects of the computation.
+    % s is elliptic curves. a, b, and c are matricies of integers that we multiply the curve points by.
+
+    E = secp256k1:make(),
+    %(5)*(7) = (hv1 - r + r)*(hv2 - r + r)
+    Base = secp256k1:order(E),
+    R = random:uniform(Base),
+
+    %unblinded witness
+    Secret5 = sub(5, R, Base),
+    Secret7 = sub(7, R, Base),
+    Secret35 = mul(Secret5, Secret7, Base),
+    US = [1, 5, 7, R, Secret5, Secret7, Secret35, Secret7, Secret5],
+    % =  [u1, u5, u7, ur, 5r1, 7r1, 35r1, 7r2, 5r2]
+
+    %5r1 = u5 - ur
+    %7r1 = u7 - ur
+    %35r1 = 5r1 * 7r1
+    %35r1 = 7r2 * 5r2
+
+    %5r1 = u5 - ur -> u5 = 5r1 + ur
+    % -> [0,1,0,0,0,0,0,0,0] =
+    %   [0,0,0,1,1,0,0,0,0] * [1,0,0,0,0,0,0,0,0]
+
+    %7r1 = u7 - ur -> u7 = 7r1 + ur
+    % -> [0,0,1,0,0,0,0,0,0] =
+    %   [0,0,0,1,0,1,0,0,0] * [1,0,0,0,0,0,0,0,0]
+
+    %35r1 = 5r1 * 7r1
+    % -> [0,0,0,0,0,0,1,0,0] =
+    %   [0,0,0,0,1,0,0,0,0] * [0,0,0,0,0,1,0,0,0]
+
+    %35r1 = 7r2 * 5r2
+    % -> [0,0,0,0,0,0,1,0,0] =
+    %   [0,0,0,0,0,0,0,1,0] * [0,0,0,0,0,0,0,0,1]
+
+    %C
+    %[0,1,0,0,0,0,0,0,0]
+    %[0,0,1,0,0,0,0,0,0]
+    %[0,0,0,0,0,0,1,0,0]
+    %[0,0,0,0,0,0,1,0,0]
+
+    %A
+    %[0,0,0,1,1,0,0,0,0]
+    %[0,0,0,1,0,1,0,0,0]
+    %[0,0,0,0,1,0,0,0,0]
+    %[0,0,0,0,0,0,0,1,0]
+
+    %B
+    %[1,0,0,0,0,0,0,0,0]
+    %[1,0,0,0,0,0,0,0,0]
+    %[0,0,0,0,0,1,0,0,0]
+    %[0,0,0,0,0,0,0,0,1]
+
+    P1000 = evaluation_to_coefficient(
+              [1,0,0,0], Base),
+    P0100 = evaluation_to_coefficient(
+              [0,1,0,0], Base),
+    P0010 = evaluation_to_coefficient(
+              [0,0,1,0], Base),
+    P0001 = evaluation_to_coefficient(
+              [0,0,0,1], Base),
+    P0011 = evaluation_to_coefficient(
+              [0,0,1,1], Base),
+    P1100 = evaluation_to_coefficient(
+              [1,1,0,0], Base),
+    P1010 = evaluation_to_coefficient(
+              [1,0,1,0], Base),
+    P0 = evaluation_to_coefficient(
+              [0,0,0,0], Base),
+    
+    %Paddingl = many(7, []),
+    PA = [P0, P0, P0, P1100, P1010, P0100, P0, P0001, P0],
+    PB = [P1100, P0, P0, P0, P0, P0010, P0, P0, P0001],
+    PC = [P0, P1000, P0100, P0, P0, P0, P0011, P0, P0],
+
+    As = dot_polys_c(US, PA, Base),
+    Bs = dot_polys_c(US, PB, Base),
+    Cs = dot_polys_c(US, PC, Base),
+    MulAB = mul_poly(As, Bs, Base),
+
+    % pedersen commitments support addition, multiplication by a constant.
+    % IPA
+    %C = A*G + B*H + (A*B)q
+    
+    ZeroPoly = subtract_poly(MulAB, Cs, Base),
+    ZD0 = lists:map(
+            fun(R) ->
+                    base_polynomial(R, Base)
+            end, [1,2,3,4]),
+    ZD = lists:foldl(fun(A, B) ->
+                             mul_poly(A, B, Base)
+                     end, [1], ZD0),
+    H = div_poly(ZeroPoly, ZD, Base),
+    3 = length(H),
+    %io:fwrite({H}),%should check that H isn't empty.
+
+    %sanity check
+    ZeroPoly = mul_poly(H, ZD, Base),
+    
+    {Gs, Hs, Q} = pedersen:basis(16, E),
+    {Gs0, _} = lists:split(4, Gs),
+    {Hs0, _} = lists:split(4, Hs),
+    CommitS = pedersen:commit(US, Gs, E),
+    CommitH = pedersen:commit(H, Gs, E),
+
+    <<Ran:256>> = pedersen:hash(
+          <<(pedersen:c_to_entropy(CommitS)):256,
+            (pedersen:c_to_entropy(CommitH)):256>>),
+    
+    %sanity check
+    true = (mul(eval_poly(Ran, H, Base),
+                eval_poly(Ran, ZD, Base),
+                Base) ==
+                eval_poly(Ran, ZeroPoly, Base)),
+    true = (eval_poly(Ran, ZeroPoly, Base) ==
+                sub(mul(eval_poly(Ran, As, Base),
+                      eval_poly(Ran, Bs, Base), 
+                     Base),
+                    eval_poly(Ran, Cs, Base),
+                    Base)),
+    
+    %io:fwrite({length(US), length(Gs)}),
+    S = pedersen_encode(US, Gs, E),
+    RAs = dot_polys_e(PA, Ran, E),
+    RBs = dot_polys_e(PB, Ran, E),
+    RCs = dot_polys_e(PC, Ran, E),
+    As2 = lists:zipwith(fun(A, B) ->
+                                mul(A, B, Base)
+                        end, US, RAs),
+    Bs2 = lists:zipwith(fun(A, B) ->
+                                mul(A, B, Base)
+                        end, US, RBs),
+    Cs2 = lists:zipwith(fun(A, B) ->
+                                mul(A, B, Base)
+                        end, US, RCs),
+    %io:fwrite(length(As2)),
+    Padding = [0,0,0,0,0,0,0],
+    V = [1,1,1,1,1,1,1,1,1] ++ Padding,
+    ProofA = 
+        pedersen:make_ipa(As2++Padding, V, Gs, Hs, Q, E),
+    ProofB = 
+        pedersen:make_ipa(Bs2 ++ Padding, V, Gs, Hs, Q, E),
+    ProofC = 
+        pedersen:make_ipa(Cs2 ++ Padding, V, Gs, Hs, Q, E),
+
+    ProofH =
+        pedersen:make_ipa(H++[0], powers(Ran, 4, Base), Gs0, Hs0, Q, E),
+    %they already know ZD, PA, PB, PC
+    %you send S, commitS, commitH, ProofA, ProofB, ProofC, ProofH
+    io:fwrite("verifying.\n"),
+    <<Ran:256>> = pedersen:hash(
+          <<(pedersen:c_to_entropy(CommitS)):256,
+            (pedersen:c_to_entropy(CommitH)):256>>),
+    true = pedersen:verify_ipa(ProofA, V, Gs, Hs, Q, E),
+    true = pedersen:verify_ipa(ProofB, V, Gs, Hs, Q, E),
+    true = pedersen:verify_ipa(ProofC, V, Gs, Hs, Q, E),
+    true = pedersen:verify_ipa(ProofH, powers(Ran, 4, Base), Gs0, Hs0, Q, E),
+
+    CommitS = pedersen:sum_up(S, E),
+    RAs = dot_polys_e(PA, Ran, E),
+    RBs = dot_polys_e(PB, Ran, E),
+    RCs = dot_polys_e(PC, Ran, E),
+    EAs = pedersen_encode(RAs, S, E),
+    EBs = pedersen_encode(RBs, S, E),
+    ECs = pedersen_encode(RCs, S, E),
+    CommitA = pedersen:sum_up(EAs, E),
+    CommitB = pedersen:sum_up(EBs, E),
+    CommitC = pedersen:sum_up(ECs, E),
+    CommitA = element(1, ProofA),
+    CommitB = element(1, ProofB),
+    CommitC = element(1, ProofC),
+    
+    true = (sub(mul(element(2, ProofA), 
+                    element(2, ProofB), 
+                    Base),
+                element(2, ProofC),
+                Base) 
+            == mul(%eval_poly(Ran, H, Base),
+                 element(2, ProofH),
+                 eval_poly(Ran, ZD, Base),
+                 Base)),
     success.

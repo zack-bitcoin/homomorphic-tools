@@ -789,14 +789,14 @@ prove_shuffle(
   #shuffle_proof{
      s = US, a = A, b = B, c = C, h = H, u = U,
      r = R, zp = ZP, cross_factor = CF}, 
-  E, Gs, Hs, Q) ->
+  E, Gs, Hs, Q, PA, PB, PC, ZD) ->
     Base = secp256k1:order(E),
     CommitS = pedersen:commit(US, Gs, E),
     CommitH = pedersen:commit(H, Gs, E),
     <<Ran:256>> = pedersen:hash(
           <<(pedersen:c_to_entropy(CommitS)):256,
             (pedersen:c_to_entropy(CommitH)):256>>),
-    ZD = zd(4),
+    %ZD = zd(4),
     %sanity check
     true = (add(mul(eval_poly(Ran, H, Base),
                 eval_poly(Ran, ZD, Base),
@@ -814,15 +814,17 @@ prove_shuffle(
                     Base)),
 
     S = pedersen_encode(US, Gs, E),
-    {PA, PB, PC} = matrices(4, Base),
+    %{PA, PB, PC} = matrices(4, Base),
     RAs = dot_polys_e(PA, Ran, E),
     RBs = dot_polys_e(PB, Ran, E),
     RCs = dot_polys_e(PC, Ran, E),
     As2 = mul_all(US, RAs, Base),
     Bs2 = mul_all(US, RBs, Base),
     Cs2 = mul_all(US, RCs, Base),
-    Padding = [0,0,0,0,0,0,0],
-    V = [1,1,1,1,1,1,1,1,1] ++ Padding,
+    %Padding = [0,0,0,0,0,0,0],
+    %V = [1,1,1,1,1,1,1,1,1] ++ Padding,
+    Padding = [0,0,0],
+    V = [1,1,1,1,1,1,1,1,1,1,1,1,1] ++ Padding,
     ProofA = 
         pedersen:make_ipa(As2++Padding, V, Gs, Hs, Q, E),
     ProofB = 
@@ -835,17 +837,19 @@ prove_shuffle(
      eval_poly(Ran, CF, Base),
     U, R}.
 
-verify_shuffle_instance({S, ProofA, ProofB, ProofC, H, RanCF, U, R}, E, Gs, Hs, Q) ->
+verify_shuffle_instance({S, ProofA, ProofB, ProofC, H, RanCF, U, R}, E, Gs, Hs, Q, PA, PB, PC, ZD) ->
     Base = secp256k1:order(E),
-    {PA, PB, PC} = matrices(4, Base),
-    ZD = zd(4),
+    %{PA, PB, PC} = matrices(4, Base),
+    %ZD = zd(4),
     CommitS = pedersen:sum_up(S, E),
     CommitH = pedersen:commit(H, Gs, E),
     <<Ran:256>> = pedersen:hash(
           <<(pedersen:c_to_entropy(CommitS)):256,
             (pedersen:c_to_entropy(CommitH)):256>>),
-    Padding = [0,0,0,0,0,0,0],
-    V = [1,1,1,1,1,1,1,1,1] ++ Padding,
+    %Padding = [0,0,0,0,0,0,0],
+    %V = [1,1,1,1,1,1,1,1,1] ++ Padding,
+    Padding = [0,0,0],
+    V = [1,1,1,1,1,1,1,1,1,1,1,1,1] ++ Padding,
     true = pedersen:verify_ipa(ProofA, V, Gs, Hs, Q, E),
     true = pedersen:verify_ipa(ProofB, V, Gs, Hs, Q, E),
     true = pedersen:verify_ipa(ProofC, V, Gs, Hs, Q, E),
@@ -1317,8 +1321,8 @@ test(11) ->
     true = verify_shuffle_new(ASF3, Base),
     {Gs, Hs, Q} = pedersen:basis(16, E),
     verify_shuffle_instance(
-      prove_shuffle(ASF3, E, Gs, Hs, Q), 
-      E, Gs, Hs, Q);
+      prove_shuffle(ASF3, E, Gs, Hs, Q, PA, PB, PC, zd(4)), 
+      E, Gs, Hs, Q, PA, PB, PC, zd(4));
 test(12) -> 
     %try attacking the mechanism
     %make it look like `27` was stored in the list.
@@ -1401,7 +1405,17 @@ test(13) ->
     SF3 = shuffle_fraction(US3, PA, PB, PC, Base, ZD),
     true = verify_shuffle(SF3, Base, zd(8)),
     5 = add(B5_2, R3, Base),
-    success.
+
+    SF4 = add_shuffles(SF1, SF2, PA, PB, PC, ZD, random:uniform(Base), E),
+    true = verify_shuffle(SF4, Base, zd(8)),
+    SF5 = add_shuffles(SF3, SF4, PA, PB, PC, ZD, random:uniform(Base), E),
+    true = verify_shuffle(SF5, Base, zd(8)),
+
+    {Gs, Hs, Q} = pedersen:basis(16, E),
+    verify_shuffle_instance(
+      prove_shuffle(SF5, E, Gs, Hs, Q, PA, PB, PC, zd(8)), 
+      E, Gs, Hs, Q, PA, PB, PC, zd(8)).
+
     
 
 

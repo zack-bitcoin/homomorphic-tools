@@ -98,8 +98,18 @@ calc_H(R, RA, T, Fs, Zs, E) ->
       calc_H(R, mul(RA, R, Base), T, tl(Fs),
              tl(Zs), E),
       Base).
-              
-    
+             
+calc_R([], [], [], B) -> 
+    <<R:256>> = pedersen:hash(B),
+    R;
+calc_R([{C1, C2}|CT], [Z|ZT], [Y|YT], B) -> 
+    B2 = <<B/binary, Z:256, Y:256, 
+           C1:256, C2:256>>,
+    calc_R(CT, ZT, YT, B2).
+calc_T({C1, C2}, R) ->
+    B = <<C1:256, C2:256, R:256>>,
+    <<R2:256>> = pedersen:hash(B),
+    R2.
 
 
 test(1) ->
@@ -267,12 +277,12 @@ test(4) ->
            fun(F, Z) ->
                    PC:eval_poly(Z, F, Base)
            end, Fs, Zs),
-    R = random:uniform(Base),%hash(commits, Zs, Ys)
+    R = calc_R(Commits, Zs, Ys, <<>>),
     G = calc_G(R, Fs, Ys, Zs, Base),
 
     CommitG = pedersen:commit(G, Gs, E),%in the notes it is D.
-
-    T = random:uniform(Base),%hash(CommitG, R)
+    
+    T = calc_T(CommitG, R),
 
     GT = PC:eval_poly(T, G, Base),
 
@@ -298,9 +308,10 @@ test(4) ->
     %send the Commits
     %they know the Gs, Hs, Q, and E as system defaults.
     %they know the Zs and Ys from processing the block and making a list of things that need to be proved.
-    %They can calculate R and T.
 
 
+    R = calc_R(Commits, Zs, Ys, <<>>),
+    T = calc_T(CommitG, R),
     true = pedersen:verify_ipa(
              OpenE, Powers4, Gs, Hs, Q, E),
     true = pedersen:verify_ipa(

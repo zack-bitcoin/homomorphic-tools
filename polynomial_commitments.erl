@@ -3,13 +3,19 @@
          coefficient_to_evaluation/2,
          evaluation_to_coefficient/2,
          dot_polys_c/3,
-         mul_poly/3,
-         subtract_poly/3,
          base_polynomial/2,
+         lagrange_polynomials/2,
+         lagrange_polynomial/4,
          add_poly/3,
-         div_poly/3,
-         eval_poly/3
+         subtract_poly/3,
+         mul_poly/3,%coefficient form
+         div_poly/3,%coefficient form
+         eval_poly/3,
+         mul_poly_c/3,%multiply by a constant
+         pedersen_encode/3,
+         powers/3
         ]).
+%looking at r1cs and some polynomial commitment stuff. Once I realized it wouldn't work to make a private oracle, I stopped making improvements.
 
 -record(shuffle_proof, {s, h, a, b, c, u = 1, zp, r = 1, cross_factor}).
 
@@ -35,11 +41,11 @@ symetric_view(X, Y) ->
 %lists:foldl(fun(A, B) ->
 %                    mul_poly(A, B, Base)
 %            end, [1], ZD0);
-zd(3, Base) -> 
+zd(N, Base) -> 
     ZD0 = lists:map(
             fun(R) ->
                     base_polynomial(R, Base)
-            end, [1,2,3]),
+            end, range(1, N+1)),
     lists:foldl(fun(A, B) ->
                         mul_poly(A, B, Base)
                 end, [1], ZD0).
@@ -712,18 +718,35 @@ add_shuffles(
     zp = ZeroPoly2, r = R2, cross_factor = CRB},
   PA, PB, PC, ZD, R, E
  ) when is_integer(R) ->
+    %merging R1CS proofs
+    %https://vitalik.ca/general/2021/11/05/halo.html
+    %for program with values S.
+    %correct execution implies: 
+    %(A dot S) * (B dot S) = (C dot S)
+
+    %new format
+    %(A dot S) * (B dot S) = E + u*(C dot S)
+    %if E = 0 and u = 1, this is a proof that conforms to the old format as well.
+
+    %given 2 proofs using the same matrices
+    %(A dot S1) * (B dot S1) - u1*(C dot S1) = E1
+    %(A dot S2) * (B dot S2) - u2*(C dot S2) = E2
+
+    %take random linear combination S3 = S1 + r*S2
 
     %Z3 = Z1 + R*Z2
-    %(A dot Z3) * (B dot Z3) - (u1+ru2)*(C dot Z3) 
-    % = E1 + r*r*E2 + r*(
-    %    (A dot Z1)*(B dot Z2) + (A dot Z2)*(B dot Z2)
-    %    - u1*(C dot Z2) - u2*(C dot Z1))
 
+    %(A dot Z3) * (B dot Z3) - (u1+ru2)*(C dot Z3) 
+    %= E1 + r*r*E2 + 
+    %  r((A dot S1)*(B dot S2) + 
+    %    (A dot S2)*(B dot S1)) -
+    %    u1*(C dot Z2) -
+    %    u2*(C dot Z1)
 
     %(A*B)-u*C=E
 
     Base = secp256k1:order(E),
-    U3 = U1 + (R*U2),
+    U3 = add(U1, mul(R, U2, Base), Base),
     S3 = pedersen:fv_add(
            S1, 
            pedersen:fv_mul(R, S2, E),
@@ -913,6 +936,7 @@ verify_shuffle(
         
 
 test(1) ->
+    %evaluation and coefficient formats of polynomials.
     Base = 19,
     C = [0, 1],
     E = coefficient_to_evaluation(C, Base),
@@ -928,6 +952,7 @@ test(1) ->
     E3 = mul_list(E1, E2, Base),
     success;
 test(2) ->
+    %recration of a example zksnark that Vitalik had written about. Used to prove fibinacci numbers.
     Base = 22953686867719691230002707821868552601124472329079,
     %E = [1,1,2,3,5,8,13],
     E = phi_list(100, Base),
@@ -953,6 +978,7 @@ test(2) ->
 %[E, C, hd(lists:reverse(E))].
 
 test(3) ->
+    %checking polynomial multiplication and division.
     Base = 23,
     P1 = [2, 3],
     P2 = [0, 5],
@@ -982,7 +1008,7 @@ test(8) ->
     %(A dot S3) * (B dot S3) - (u1 + r*u2)*(C dot S3)
     %= E1 + r*r*E2 + 
     %  r((A dot S1)*(B dot S2) + 
-    %    (A dot S2)*(B dot S1) -
+    %    (A dot S2)*(B dot S1)) -
     %    u1*(C dot Z2) -
     %    u2*(C dot Z1)
     E = secp256k1:make(),
@@ -1354,11 +1380,10 @@ test(12) ->
              SharedR, Base),
     success;
 test(13) -> 
-    %fix attack from test 12
+    %privately selecting a value from the list: [5,7,11,13]
     E = secp256k1:make(),
     Base = secp256k1:order(E),
     ZD = zd(8),
-    V = [7, 11],
 
     % [1, 5p, 7p, b, 5d, 7d, ub, 5b, 7b, 35b, 12b, sb, tb]
     R1 = random:uniform(Base),
@@ -1368,7 +1393,15 @@ test(13) ->
     B12 = add(B5, B7, Base),
     SB = B7,
     TB = B5,
-    US = [1,5,7,R1,B5,B7,0,B5,B7,B35,B12,SB,TB],
+    US = [1,
+          5,7,%blinded or clear inputs
+          R1,%blinding factor
+          B5,B7,%blinded or double-blinded
+          0,%unblinding factor
+          B5,B7,%blinded 
+          B35,%product
+          B12,%sub
+          SB,TB],%pair, possibly in other order
 
     R2 = random:uniform(Base),
     B11 = sub(11, R2, Base),
@@ -1385,40 +1418,74 @@ test(13) ->
     R1DE13 = add(R1, DE13, Base),
     Mul = mul(R1DE13, B5_2, Base),
     Add = add(R1DE13, B5_2, Base),
-    US3 = [1,TB,TB2,R3,
+%    US3 = [1,TB,TB2,R3,
+%           sub(TB, R3, Base),
+%           DE13,
+%           R1,%using R1 here because we want the 5 to be decoded. If we wanted to decode the 13, we would have used R2.
+%           B5_2,R1DE13,
+%           Mul,Add,R1DE13,B5_2],
+    %tb = 5-r1
+    %tb2 = 13 - r2 
+    US3 = [1,add(R1, sub(TB2, R3, Base), Base),
+           sub(5, R3, Base),
+           R1,
+           sub(TB2, R3, Base),
+           %DE13,
            sub(TB, R3, Base),
-           DE13,
-           R1,B5_2,R1DE13,
-           Mul,Add,R1DE13,B5_2],
+           R3,%using R1 here because we want the 5 to be decoded. If we wanted to decode the 13, we would have used R2.
+           TB2,TB,
+           mul(TB2, TB, Base),
+           add(TB2, TB, Base),
+           TB,TB2],
 
 
     {PA, PB, PC} = matrices_double(Base),
 
     SF1 = shuffle_fraction(US, PA, PB, PC, Base, ZD),
-    true = verify_shuffle(SF1, Base, zd(8)),
-    7 = add(SB, R1, Base),
+    true = verify_shuffle(SF1, Base, ZD),
+    7 = add(SB, R1, Base),%unblinding an output
     5 = add(TB, R1, Base),
     SF2 = shuffle_fraction(US2, PA, PB, PC, Base, ZD),
-    true = verify_shuffle(SF2, Base, zd(8)),
+    true = verify_shuffle(SF2, Base, ZD),
     11 = add(SB2, R2, Base),
     13 = add(TB2, R2, Base),
     SF3 = shuffle_fraction(US3, PA, PB, PC, Base, ZD),
-    true = verify_shuffle(SF3, Base, zd(8)),
-    5 = add(B5_2, R3, Base),
+    true = verify_shuffle(SF3, Base, ZD),
+    5 = add(B5_2, R3, Base),%unblinding the final output
 
     SF4 = add_shuffles(SF1, SF2, PA, PB, PC, ZD, random:uniform(Base), E),
-    true = verify_shuffle(SF4, Base, zd(8)),
+    true = verify_shuffle(SF4, Base, ZD),
     SF5 = add_shuffles(SF3, SF4, PA, PB, PC, ZD, random:uniform(Base), E),
-    true = verify_shuffle(SF5, Base, zd(8)),
+    true = verify_shuffle(SF5, Base, ZD),
 
     {Gs, Hs, Q} = pedersen:basis(16, E),
-    verify_shuffle_instance(
-      prove_shuffle(SF5, E, Gs, Hs, Q, PA, PB, PC, zd(8)), 
-      E, Gs, Hs, Q, PA, PB, PC, zd(8)).
+    true = verify_shuffle_instance(
+             prove_shuffle(SF5, E, Gs, Hs, Q, PA, PB, PC, zd(8)), 
+             E, Gs, Hs, Q, PA, PB, PC, zd(8)),
+    
+%now verification
+    %they already know E, Gs, Hs, Q, PA, PB, PC, ZD
+
+    %vector has 13 elements. 0th is always 1. blinding and unblinding factors can always either be zero, or the same random value. the 2 inputs came from somewhere else. So all together, we need 8 encrypted elements per proof.
+
+    ES1 = pedersen_encode(US, Gs, E),%7 encrypted elements: 3, 4, 5, 9, 10, 11, 12. 
+    %2 clear elements: 1, 2
+    ES2 = pedersen_encode(US2, Gs, E),%same as ES1
+    ES3 = pedersen_encode(US3, Gs, E),% clear elements: 9, 10, 11, 12. 
+    %10 elements are encrypted.
+    %if E is the very top of the tree, then the blinding factor can be 0 to reveal. so 1 more element in the clear, and 1 less encrypted.
+
+    %all together, if you want to select between N elements by doing lots of 2-shuffles, it would take (N*7) + ((N-1)*10) - 1 elliptic curve points, each of which is 33 bytes.
+%so around 17*33*N = 561*N bytes. for a verkle tree where each node has 256 children, this is around 128 kilobytes
+    ok;
+test(14) -> 
+    %we need to start building up a binary tree shape. 
+    %t(t(5, 7), t(11, 13))
+
+    %grab blinded 5 = (5-R) rem Base
+
+    ok.
 
     
-
-
     
-
 

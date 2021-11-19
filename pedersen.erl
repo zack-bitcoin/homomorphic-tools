@@ -33,9 +33,17 @@
 %finite field arithmetic modulus the group order of the elliptic curve.
 %for doing operations on the scalars that we use to multiply curve points.
 fadd(X, Y, E) when (is_integer(X) and
+                    is_integer(Y) and
+                    is_integer(E)) ->
+    (X + Y) rem E.
+fadd(X, Y, E) when (is_integer(X) and
                     is_integer(Y)) ->
     N = order(E),
     (X + Y) rem N.
+fmul(X, Y, E) when (is_integer(X) and
+                    is_integer(Y) and
+                    is_integer(E))->
+    (X * Y) rem E;
 fmul(X, Y, E) when (is_integer(X) and
                    is_integer(Y)) ->
     N = order(E),

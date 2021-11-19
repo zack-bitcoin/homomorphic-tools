@@ -141,9 +141,13 @@ prime_factors(N) ->
 prime_factors2(A, _, 1) -> lists:reverse(A);
 prime_factors2([[C, E]|T], C, N) 
   when ((N rem C) == 0) -> 
+    io:fwrite(integer_to_list(C)),
+    io:fwrite("\n"),
     prime_factors2([[C, E+1]|T], C, N div C);
 prime_factors2(T, C, N) 
   when ((N rem C) == 0) -> 
+    io:fwrite(integer_to_list(C)),
+    io:fwrite("\n"),
     prime_factors2([[C, 1]|T], C, N div C);
 prime_factors2(T, C, N) ->
     prime_factors2(T, C+1, N).

@@ -2,7 +2,8 @@
 -export([test/0, make/0, addition/3, 
          multiplication/3, gen_point/1,
          field_prime/1, order/1,
-         on_curve/2]).
+         on_curve/2,
+         mod/2]).
 
 -record(curve, {a, b, g, n, p}).
 field_prime(C) -> C#curve.p.

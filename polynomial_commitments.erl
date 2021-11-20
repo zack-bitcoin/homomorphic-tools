@@ -5,7 +5,7 @@
          dot_polys_c/3,
          base_polynomial/2,
          lagrange_polynomials/2,
-         lagrange_polynomial/4,
+         lagrange_polynomial/3,
          add_poly/3,
          subtract_poly/3,
          mul_poly/3,%coefficient form
@@ -15,7 +15,6 @@
          pedersen_encode/3,
          powers/3
         ]).
-%looking at r1cs and some polynomial commitment stuff. Once I realized it wouldn't work to make a private oracle, I stopped making improvements.
 
 -record(shuffle_proof, {s, h, a, b, c, u = 1, zp, r = 1, cross_factor}).
 
@@ -287,6 +286,7 @@ div_poly(A, [1], _Base) -> A;
 %  when (length(A) < length(B)) ->
 %    fail;
 div_poly(A, B, Base) -> 
+    % O(length(A)*length(B)).
     D = length(A) - length(B),
     AllZeros = is_all_zeros(A),
     if
@@ -345,13 +345,17 @@ base_polynomial(Intercept, Base) ->
 remove_element(X, [X|T]) -> T;
 remove_element(X, [A|T]) -> 
     [A|remove_element(X, T)].
-lagrange_polynomials(Many, Base) ->
+lagrange_polynomials(Many, Base) 
+  when is_integer(Many) ->
     R = range(1, Many+1),
+    lagrange_polynomials(R, Base);
+lagrange_polynomials(R, Base) 
+  when is_list(R) ->
     lists:map(fun(X) -> 
                       lagrange_polynomial(
-                        R, Many, X, Base)
+                        R, X, Base)
               end, R).
-lagrange_polynomial(R, Many, N, Base) ->
+lagrange_polynomial(R, N, Base) ->
     R2 = remove_element(N, R),
     Ps = lists:map(
            fun(X) -> base_polynomial(X, Base) end, 
@@ -375,7 +379,6 @@ coefficient_to_evaluation(L, M, Base) ->
     lists:map(fun(X) -> eval_poly(X, L, Base) end, R).
 evaluation_to_coefficient(L, Base) ->
     Many = length(L),
-    R = range(0, Many),
     LP = lagrange_polynomials(Many, Base),%we should memorize these.
     L4 = evaluation_to_coefficients2(L, LP, Base, Many, 1),
     P = lists:foldl(fun(X, A) ->

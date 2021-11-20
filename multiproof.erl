@@ -30,6 +30,37 @@ add_polys([A, B|T], Base) ->
     add_polys([PC:add_poly(A, B, Base)|
                T], Base).
 
+calc_G_e(R, As, Ys, Zs, Domain, DA, Base) ->
+    GP = lists:zipwith3(
+           fun(A, Y, Z) ->
+                   X = poly:sub(
+                         A, %subtract Y from every element in A.
+                         poly:c2e([Y], Domain, Base), 
+                         Base),
+                   %io:fwrite({DA, Z, Domain}),
+                   poly:div_e(
+                     X,
+                     Domain,
+                     DA,
+                     Z,
+                     Base)
+           end, As, Ys, Zs),
+    %io:fwrite({GP}),
+    calc_G_e_helper(1, R, GP, Base).
+calc_G_e_helper(_, _, [], _) -> [];
+calc_G_e_helper(RA, R, [P|T], Base) -> 
+    X = poly:mul_scalar(RA, P, Base),
+    case T of
+        [] -> X;
+        _ ->
+            poly:add(
+              X,
+              calc_G_e_helper(
+                poly:fmul(RA, R, Base), 
+                R, T, Base),
+              Base)
+    end.
+    
 calc_G(R, Fs, Ys, Zs, Base) ->
     %polynomials in coefficient format.
     PC = polynomial_commitments,
@@ -123,7 +154,49 @@ calc_T({C1, C2}, R) ->
     <<R2:256>> = pedersen:hash(B),
     R2.
 
-
+prove(As, %committed data
+      Zs, %the slot in each commit we are reading from. A list as long as As. Made up of elements that are in the domain.
+      Domain, %These are the coordinates we are using for lagrange basis. (This is probably the roots of unity)
+      Gs, Hs, Q, %elliptic curve generator points for pedersen commits and inner product arguments.
+      E) -> %the elliptic curve
+    Base = secp256k1:order(E),
+    PC = polynomial_commitments,
+    Fs = lists:map(
+           fun(X) ->
+                   PC:evaluation_to_coefficient(
+                     X, Base)
+           end, As),
+    Commits = lists:zipwith(
+                fun(A, F) ->
+                        Com = pedersen:commit(F, Gs, E),
+                        Com = poly:commit_c(F, Gs, E),
+                        Com = poly:commit_e(A, Gs, Domain, E),
+                        Com
+                end, As, Fs),
+    Ys = lists:zipwith(
+           fun(F, Z) ->
+                   PC:eval_poly(Z, F, Base)
+           end, Fs, Zs),
+    Ys = lists:zipwith(
+           fun(F, Z) ->
+                   poly:eval_e(Z, F, Domain, Base)
+           end, As, Zs),
+    R = calc_R(Commits, Zs, Ys, <<>>),
+    G = calc_G(R, Fs, Ys, Zs, Base),
+    DAC = poly:calc_DA(Domain, E),
+    DA = poly:c2e(DAC, Domain, Base),
+    G2 = calc_G_e(R, As, Ys, Zs, Domain, DA, Base),
+    Ls = poly:lagrange_polynomials(Domain, Base),
+    %confirmed that c2e and e2c are inverses.
+    %error must be in calc_G_e
+   % io:fwrite({G, poly:e2c(G2, Ls, Base)}),
+    CommitG = pedersen:commit(G, Gs, E),%in the notes it is D.
+    CommitG = poly:commit_e(G2, Gs, Domain, E),%in the notes it is D.
+    T = calc_T(CommitG, R),
+    GT = poly:eval_e_outside(T, G, Base),
+    
+    success.
+                                
 test(1) ->
 
     E = secp256k1:make(),
@@ -265,12 +338,12 @@ test(3) ->
 test(4) ->
     PC = polynomial_commitments,
     E = secp256k1:make(),
+    {Gs, Hs, Q} = pedersen:basis(4, E),
     Base = secp256k1:order(E),
     A1 = [1,1,2],
     A2 = [2,4,6],
     A3 = [2,3,5],
     A4 = [3,5,8],
-    {Gs, Hs, Q} = pedersen:basis(4, E),
     F1 = PC:evaluation_to_coefficient(
            A1, Base),
     F2 = PC:evaluation_to_coefficient(
@@ -346,7 +419,15 @@ test(4) ->
 test(5) ->
     E = secp256k1:make(),
     Base = secp256k1:order(E),
-    success.
+    {Gs, Hs, Q} = pedersen:basis(4, E),
+    A1 = [1,1,2,3],
+    A2 = [2,4,6,8],
+    A3 = [2,3,5,7],
+    A4 = [3,5,8,13],
+    As = [A1, A2, A3, A4],
+    Zs = [1,2,3,2],
+    Domain = [1,2,3,4],
+    prove(As, Zs, Domain, Gs, Hs, Q, E).
 
 
     

@@ -117,8 +117,9 @@ inverse(A, N) ->
     EEA = eea(A, N),
     case EEA of
         undefined -> 
-            io:fwrite(A),
-            io:fwrite("inverse does not exist"),
+            io:fwrite("inverse does not exist "),
+            io:fwrite(integer_to_list(A)),
+            io:fwrite("\n"),
             does_not_exist;
         {G, S, T} ->
             case G of

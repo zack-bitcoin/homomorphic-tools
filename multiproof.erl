@@ -74,6 +74,18 @@ calc_E(R, RA, T, Zs, Commits, E) ->
        E)|
      calc_E(R, mul(RA, R, Base), T,
             tl(Zs), tl(Commits), E)].
+neg_calc_E(_, _, _, _, [], _) -> [];
+neg_calc_E(R, RA, T, Zs, Commits, E) ->
+    Base = secp256k1:order(E),
+    [pedersen:mul(
+       hd(Commits), 
+       sub(0, 
+           divide(RA, sub(T, hd(Zs), Base), Base),
+           Base),
+       E)|
+     neg_calc_E(R, mul(RA, R, Base), T,
+            tl(Zs), tl(Commits), E)].
+
 
 
 %sum_i:  r^i * y_i / (t - z_i)
@@ -292,40 +304,45 @@ test(4) ->
     %need to calculate an opening to commit E at T.
 
     H = calc_H(R, 1, T, Fs, Zs, E),%is summing up polynomials, H has a length based on how many variables there are, not how long Fs or Zs is.
-    CommitE = pedersen:commit(H, Gs, E),
+    %CommitE = pedersen:commit(H, Gs, E),
     %sumi  r^i * f_i(X)/(T - Z_i)
     %io:fwrite({Gs}),
     Powers4 = PC:powers(T, 4, Base),
-    OpenE = pedersen:make_ipa(
-              H++[0], PC:powers(T, 4, Base),
-              Gs, Hs, Q, E),
-    OpenG = pedersen:make_ipa(
-              G++[0,0], PC:powers(T, 4, Base),
+    G_sub_E = lists:zipwith(
+                fun(A, B) -> sub(A, B, Base) end,
+                G++[0,0], H ++ [0]),
+                                     
+    OpenG_sub_E = pedersen:make_ipa(
+              G_sub_E, PC:powers(T, 4, Base),
               Gs, Hs, Q, E),
 
-    %send an opening to E at T.
-    %send an opening to G at T.
-    %send the Commits
+    %send an opening to G-E at T.
+    %send a commit to G
+    %send the Commits 
     %they know the Gs, Hs, Q, and E as system defaults.
     %they know the Zs and Ys from processing the block and making a list of things that need to be proved.
 
+    %trying to verify that G is a polynomial.
 
     R = calc_R(Commits, Zs, Ys, <<>>),
     T = calc_T(CommitG, R),
+    Powers4 = PC:powers(T, 4, Base),
     true = pedersen:verify_ipa(
-             OpenE, Powers4, Gs, Hs, Q, E),
-    true = pedersen:verify_ipa(
-             OpenG, Powers4, Gs, Hs, Q, E),
+             OpenG_sub_E, Powers4, Gs, Hs, Q, E),
     G2 = calc_G2(R, 1, T, Ys, Zs, Base),
 
-    %they can calculate commitE
-    E_list = calc_E(R, 1, T, Zs, Commits, E),%commits are related to Fs
-    CommitE = pedersen:sum_up(E_list, E),
-    CommitE = element(1, OpenE),
+    Neg_E_list = neg_calc_E(R, 1, T, Zs, Commits, E),%commits are related to Fs
+    CommitNegE = pedersen:sum_up(Neg_E_list, E),
+    CommitG_sub_E = pedersen:add(CommitG, CommitNegE, E),
+    CommitG_sub_E = element(1, OpenG_sub_E),
 
-    0 = add(G2, sub(element(2, OpenG), element(2, OpenE), Base), Base),
-    
-    success;
+    0 = add(G2, element(2, OpenG_sub_E), Base),
+
+    {CommitG, %an elliptic point element
+     Commits, %one elliptic point per IPA being proved
+     OpenG_sub_E %an single IPA, as 4 + 2*log2(many variables per ipa) elliptic curve points, and one integer.
+    };
+    %success;
 test(5) ->
     E = secp256k1:make(),
     Base = secp256k1:order(E),

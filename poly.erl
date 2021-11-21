@@ -148,19 +148,20 @@ remove_from([A|T], X) ->
 div_e(Ps, Domain, DA, M, Base) -> 
     %calculates the polynomial P(x) / (x - M).
     %M is a point in the domain of polynomial P.
-    DA_M = grab_dam(M, Domain, DA),
     %io:fwrite({Ps, DA, M}),
     lists:zipwith(
       fun(P, D) -> 
               if
-                  %(P == 0) -> 0;
                   not(D == M) -> 
                       fdiv(
                         P, 
                         fsub(D, M, Base), 
                         Base);
                   true -> 
-                      div_e2(Ps, Domain, M, DA, DA_M, Base)
+                      DA_M = grab_dam(
+                               M, Domain, DA),
+                      div_e2(Ps, Domain, M, 
+                             DA, DA_M, Base)
               end
       end, Ps, Domain).
 div_e2(Ps, Domain, M, DA, DA_M, Base) ->
@@ -181,7 +182,15 @@ grab_dam(M, [M|_], [D|_]) -> D;
 grab_dam(M, [_|T], D) -> 
     grab_dam(M, T, tl(D)).
    
+calc_A(Domain, Base) -> 
+    %in roots of unity case, it is (x^d - 1)
+    L = lists:map(
+          fun(D) -> base_polynomial_c(D, Base) 
+          end, Domain),
+    mul_c_all(L, Base).
 calc_DA(Domain, E) -> 
+    %this is the derivative of polynomial A. for some deterministic version of the derivative.
+    %in the roots of unity case, A(root_i) is (vector size)*(root^(-i))
     Base = secp256k1:order(E),
     X = lists:map(
           fun(D) ->
@@ -195,6 +204,7 @@ calc_DA(Domain, E) ->
                   mul_c_all(Y, Base)
           end, Domain),
     add_all(X, Base).
+    
                           
               
     
@@ -217,6 +227,29 @@ eval_poly2(X, XA, [H|T], Base) ->
 eval_e(X, [P|_], [X|_], Base) -> P;
 eval_e(X, [_|P], [_|D], Base) -> 
     eval_e(X, P, D, Base).
+
+%evaluation format, looking up something outside the known domain.
+%DA is also in evaluation format
+eval_outside_v(Z, Domain, A, DA, Base) ->
+    AZ = eval_c(Z, A, Base),
+    lists:zipwith(
+      fun(D, DAi) ->
+              fdiv(AZ,
+                   fmul(DAi,
+                        fsub(Z, D, Base),
+                        Base),
+                   Base)
+      end, Domain, DA).
+    
+eval_outside(Z, P, Domain, A, DA, Base) ->
+    %Z is a point not in domain.
+    %A(Z)*sum(P_i/(A'(domain_i) * (z - domain_i)))
+    EV = eval_outside_v(Z, Domain, A, DA, Base),
+    L = lists:zipwith(
+          fun(PE, V) ->
+                  fmul(PE, V, Base)
+          end, P, EV),
+    fadd_all(L, Base).
     
 
 remove_element(X, [X|T]) -> T;
@@ -309,12 +342,15 @@ test() ->
     P3b = c2e(P3, Domain, Base), 
     P3b = mul_e(P1b, P2b, Base),
 
-    DAC = poly:calc_DA(Domain, E),
-    DA = poly:c2e(DAC, Domain, Base),
+    DAC = calc_DA(Domain, E),
+    DA = c2e(DAC, Domain, Base),
     P1b = div_e(P3b, Domain, DA, 3, Base),
     P2b = div_e(P3b, Domain, DA, 2, Base),
 
-   
+    PA = calc_A(Domain, Base),
+    P5 = eval_outside(5, P3b, Domain, PA, DA, Base),
+    P5 = eval_c(5, P3, Base),
+    
     success.
     
     

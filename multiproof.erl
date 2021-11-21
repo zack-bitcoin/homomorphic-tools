@@ -141,6 +141,22 @@ calc_H(R, RA, T, Fs, Zs, E) ->
       calc_H(R, mul(RA, R, Base), T, tl(Fs),
              tl(Zs), E),
       Base).
+
+calc_H_e(_, _, _, [], [], _) -> [];
+calc_H_e(R, RA, T, As, Zs, Base) ->
+    X = poly:mul_scalar(
+          divide(RA, sub(T, hd(Zs), Base), Base),
+          hd(As),
+          Base),
+    if
+        (length(As) == 1) -> X;
+        true ->
+            poly:add(
+              X,
+              calc_H_e(R, mul(RA, R, Base), T, tl(As),
+                       tl(Zs), Base),
+              Base)
+    end.
              
 calc_R([], [], [], B) -> 
     <<R:256>> = pedersen:hash(B),
@@ -158,44 +174,28 @@ prove(As, %committed data
       Zs, %the slot in each commit we are reading from. A list as long as As. Made up of elements that are in the domain.
       Domain, %These are the coordinates we are using for lagrange basis. (This is probably the roots of unity)
       Gs, Hs, Q, %elliptic curve generator points for pedersen commits and inner product arguments.
-      E) -> %the elliptic curve
+      E, DA, PA, Ls) -> %the elliptic curve
     Base = secp256k1:order(E),
-    PC = polynomial_commitments,
-    Fs = lists:map(
-           fun(X) ->
-                   PC:evaluation_to_coefficient(
-                     X, Base)
-           end, As),
-    Commits = lists:zipwith(
-                fun(A, F) ->
-                        Com = pedersen:commit(F, Gs, E),
-                        Com = poly:commit_c(F, Gs, E),
-                        Com = poly:commit_e(A, Gs, Domain, E),
-                        Com
-                end, As, Fs),
-    Ys = lists:zipwith(
-           fun(F, Z) ->
-                   PC:eval_poly(Z, F, Base)
-           end, Fs, Zs),
+    Commits_e = lists:map(
+                  fun(A) ->
+                          poly:commit_c(A, Gs, E)
+                  end, As),
     Ys = lists:zipwith(
            fun(F, Z) ->
                    poly:eval_e(Z, F, Domain, Base)
            end, As, Zs),
-    R = calc_R(Commits, Zs, Ys, <<>>),
-    G = calc_G(R, Fs, Ys, Zs, Base),
-    DAC = poly:calc_DA(Domain, E),
-    DA = poly:c2e(DAC, Domain, Base),
+    R = calc_R(Commits_e, Zs, Ys, <<>>),
     G2 = calc_G_e(R, As, Ys, Zs, Domain, DA, Base),
-    Ls = poly:lagrange_polynomials(Domain, Base),
-    %confirmed that c2e and e2c are inverses.
-    %error must be in calc_G_e
-   % io:fwrite({G, poly:e2c(G2, Ls, Base)}),
-    CommitG = pedersen:commit(G, Gs, E),%in the notes it is D.
-    CommitG = poly:commit_e(G2, Gs, Domain, E),%in the notes it is D.
-    T = calc_T(CommitG, R),
-    GT = poly:eval_e_outside(T, G, Base),
-    
-    success.
+    CommitG_e = pedersen:commit(G2, Gs, E),
+    T = calc_T(CommitG_e, R),
+    GT = poly:eval_outside(T, G2, Domain, PA, DA, Base),
+    He = calc_H_e(R, 1, T, As, Zs, Base),
+    G_sub_E_e = poly:sub(G2, He, Base),
+    EV = poly:eval_outside_v(T, Domain, PA, DA, Base),
+    OpenG_sub_E_e = pedersen:make_ipa(
+                     G_sub_E_e, EV,
+                     Gs, Hs, Q, E),
+    {CommitG_e, Commits_e, OpenG_sub_E_e}.
                                 
 test(1) ->
 
@@ -427,9 +427,46 @@ test(5) ->
     As = [A1, A2, A3, A4],
     Zs = [1,2,3,2],
     Domain = [1,2,3,4],
-    prove(As, Zs, Domain, Gs, Hs, Q, E).
+    io:fwrite("setup parameters\n"),
+    DAC = poly:calc_DA(Domain, E),
+    DA = poly:c2e(DAC, Domain, Base),%todo should save this somewhere
+    Ls = poly:lagrange_polynomials(Domain, Base),%todo save this somewhere
+    PA = poly:calc_A(Domain, Base),%todo save this somewhere
+    io:fwrite("make proof\n"),
+    {CommitG_e, Commits_e, OpenG_sub_E_e} = 
+        prove(As, Zs, Domain, Gs, Hs, Q, E, DA, PA, Ls),
+    io:fwrite("verify proof\n"),
+    
+    
+    %they know the Domain, Gs, Hs, Q, and E as system defaults.
+    %they know the Zs and Ys from processing the block and making a list of things that need to be proved.
+    Ys = lists:zipwith(
+           fun(F, Z) ->
+                   poly:eval_e(Z, F, Domain, Base)
+           end, As, Zs),
+    %trying to verify that G is a polynomial.
+    R = calc_R(Commits_e, Zs, Ys, <<>>),
+    T = calc_T(CommitG_e, R),
+    EV = poly:eval_outside_v(T, Domain, PA, DA, Base),
+    true = pedersen:verify_ipa(
+             OpenG_sub_E_e, EV, Gs, Hs, Q, E),
+
+    G2 = calc_G2(R, 1, T, Ys, Zs, Base),
+
+    %less confident
+    %Neg_E_list = neg_calc_E(R, 1, T, Zs, Commits, E),%commits are related to Fs
+    %CommitNegE = pedersen:sum_up(Neg_E_list, E),
+    %CommitG_sub_E = pedersen:add(CommitG, CommitNegE, E),
+    %CommitG_sub_E = element(1, OpenG_sub_E),
 
 
+    Neg_E_list_e = neg_calc_E(R, 1, T, Zs, Commits_e, E),%commits are related to Fs
+    CommitNegE_e = pedersen:sum_up(Neg_E_list_e, E),
+    CommitG_sub_E_e = pedersen:add(CommitG_e, CommitNegE_e, E),
+    CommitG_sub_E_e = element(1, OpenG_sub_E_e),
+
+    0 = add(G2, element(2, OpenG_sub_E_e), Base),
+    success.
     
     
 

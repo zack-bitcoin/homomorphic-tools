@@ -496,7 +496,12 @@ test(5) ->
     true = verify(Proof, Zs, Ys, P),
     success;
 test(6) ->
-    Many = 100,
+    Many = 300,
+    %verifies 45.5 per second
+    %we want ~120 000 per second. a factor of 2637 short.
+    %switching to jacob format saves about 5x.
+    %bucket method saves about 24x
+    %rewrite to C saves around 5x
     E = secp256k1:make(),
     Base = secp256k1:order(E),
     Root4 = primitive_nth_root(4, E),

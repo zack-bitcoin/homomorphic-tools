@@ -8,6 +8,19 @@
 
 %vitalik wrote a little on this topic as well: https://vitalik.ca/general/2021/06/18/verkle.html
 
+-record(p, {e, b, g, h, q, domain, a, da, ls}).
+
+make_parameters(Domain, E) ->
+    Base = secp256k1:order(E),
+    {Gs, Hs, Q} = pedersen:basis(4, E),
+    DAC = poly:calc_DA(Domain, E),
+    DA = poly:c2e(DAC, Domain, Base),
+    Ls = poly:lagrange_polynomials(Domain, Base),
+    PA = poly:calc_A(Domain, Base),
+    #p{e = E, b = Base, g = Gs, h = Hs, q = Q,
+       domain = Domain, a = PA, da = DA, ls = Ls}.
+    
+
 primitive_nth_root(N, E) ->
     Base = secp256k1:order(E),
     0 = N rem 2,
@@ -108,14 +121,12 @@ calc_E(R, RA, T, Zs, Commits, E) ->
 neg_calc_E(_, _, _, _, [], _) -> [];
 neg_calc_E(R, RA, T, Zs, Commits, E) ->
     Base = secp256k1:order(E),
-    [pedersen:mul(
-       hd(Commits), 
-       sub(0, 
+    Exp = sub(0, 
            divide(RA, sub(T, hd(Zs), Base), Base),
            Base),
-       E)|
+    [pedersen:mul(hd(Commits), Exp, E)|
      neg_calc_E(R, mul(RA, R, Base), T,
-            tl(Zs), tl(Commits), E)].
+                tl(Zs), tl(Commits), E)].
 
 
 
@@ -173,17 +184,22 @@ calc_T({C1, C2}, R) ->
 prove(As, %committed data
       Zs, %the slot in each commit we are reading from. A list as long as As. Made up of elements that are in the domain.
       Domain, %These are the coordinates we are using for lagrange basis. (This is probably the roots of unity)
-      Gs, Hs, Q, %elliptic curve generator points for pedersen commits and inner product arguments.
-      E, DA, PA, Ls) -> %the elliptic curve
+      #p{g = Gs, h = Hs, q = Q, e = E, da = DA,
+        a = PA, ls = Ls}) ->
     Base = secp256k1:order(E),
+    %io:fwrite("prove 0 G\n"),
+    %io:fwrite({Gs}),
     Commits_e = lists:map(
                   fun(A) ->
                           poly:commit_c(A, Gs, E)
                   end, As),
+    io:fwrite("prove 1 G\n"),
     Ys = lists:zipwith(
            fun(F, Z) ->
                    poly:eval_e(Z, F, Domain, Base)
            end, As, Zs),
+    io:fwrite("prove 2 G\n"),
+    Timestamp1 = erlang:timestamp(),
     R = calc_R(Commits_e, Zs, Ys, <<>>),
     G2 = calc_G_e(R, As, Ys, Zs, Domain, DA, Base),
     CommitG_e = pedersen:commit(G2, Gs, E),
@@ -192,11 +208,51 @@ prove(As, %committed data
     He = calc_H_e(R, 1, T, As, Zs, Base),
     G_sub_E_e = poly:sub(G2, He, Base),
     EV = poly:eval_outside_v(T, Domain, PA, DA, Base),
+    Timestamp2 = erlang:timestamp(),
     OpenG_sub_E_e = pedersen:make_ipa(
                      G_sub_E_e, EV,
                      Gs, Hs, Q, E),
+    Timestamp3 = erlang:timestamp(),
+    io:fwrite("ipa time : "),
+    io:fwrite(integer_to_list(timer:now_diff(Timestamp3, Timestamp2))),
+    io:fwrite("\n"),
+    io:fwrite("other proving time: "),
+    io:fwrite(integer_to_list(timer:now_diff(Timestamp2, Timestamp1))),
+    io:fwrite("\n"),
     {CommitG_e, Commits_e, OpenG_sub_E_e}.
-                                
+verify({CommitG, Commits, Open_G_E}, Zs, Ys, 
+       #p{g = Gs, h = Hs, q = Q, e = E,
+         domain = Domain, da = DA, a = PA}) ->
+    Base = secp256k1:order(E),
+    R = calc_R(Commits, Zs, Ys, <<>>),
+    T = calc_T(CommitG, R),
+    EV = poly:eval_outside_v(
+           T, Domain, PA, DA, Base),
+    io:fwrite("verify ipa start\n"),
+    true = pedersen:verify_ipa(
+             Open_G_E, EV, Gs, Hs, Q, E),
+    io:fwrite("verify ipa end\n"),
+    io:fwrite("calc G2\n"),
+    G2 = calc_G2(R, 1, T, Ys, Zs, Base),
+    io:fwrite("neg e list\n"),
+    Neg_E_list = %this is the slow step.
+        neg_calc_E(R, 1, T, Zs, Commits, E),%commits are related to Fs
+    io:fwrite("calc commit neg e\n"),
+    CommitNegE = pedersen:sum_up(Neg_E_list, E),
+    io:fwrite("calc commit g-e\n"),
+    CommitG_sub_E = pedersen:add(CommitG, CommitNegE, E),
+    CommitG_sub_E = element(1, Open_G_E),
+    0 == add(G2, element(2, Open_G_E), Base).
+
+range(X, X) -> [];
+range(A, X) when A<X -> 
+    [A|range(A+1, X)].
+
+many(_, 0) -> [];
+many(X, N) when N > 0 -> 
+    [X|many(X, N-1)].
+    
+                          
 test(1) ->
 
     E = secp256k1:make(),
@@ -336,6 +392,7 @@ test(3) ->
       G
     };
 test(4) ->
+    %in coefficient format. slower, but possibly easier to understand.
     PC = polynomial_commitments,
     E = secp256k1:make(),
     {Gs, Hs, Q} = pedersen:basis(4, E),
@@ -417,56 +474,64 @@ test(4) ->
     };
     %success;
 test(5) ->
+    Domain = [1,2,3,4],
+    io:fwrite("setup parameters\n"),
     E = secp256k1:make(),
-    Base = secp256k1:order(E),
-    {Gs, Hs, Q} = pedersen:basis(4, E),
+    P = make_parameters(Domain, E),
+    Base = P#p.b,
+    io:fwrite("prepare values to commit\n"),
     A1 = [1,1,2,3],
     A2 = [2,4,6,8],
     A3 = [2,3,5,7],
     A4 = [3,5,8,13],
     As = [A1, A2, A3, A4],
     Zs = [1,2,3,2],
-    Domain = [1,2,3,4],
-    io:fwrite("setup parameters\n"),
-    DAC = poly:calc_DA(Domain, E),
-    DA = poly:c2e(DAC, Domain, Base),%todo should save this somewhere
-    Ls = poly:lagrange_polynomials(Domain, Base),%todo save this somewhere
-    PA = poly:calc_A(Domain, Base),%todo save this somewhere
-    io:fwrite("make proof\n"),
-    {CommitG_e, Commits_e, OpenG_sub_E_e} = 
-        prove(As, Zs, Domain, Gs, Hs, Q, E, DA, PA, Ls),
-    io:fwrite("verify proof\n"),
-    
-    
-    %they know the Domain, Gs, Hs, Q, and E as system defaults.
-    %they know the Zs and Ys from processing the block and making a list of things that need to be proved.
     Ys = lists:zipwith(
            fun(F, Z) ->
                    poly:eval_e(Z, F, Domain, Base)
            end, As, Zs),
-    %trying to verify that G is a polynomial.
-    R = calc_R(Commits_e, Zs, Ys, <<>>),
-    T = calc_T(CommitG_e, R),
-    EV = poly:eval_outside_v(T, Domain, PA, DA, Base),
-    true = pedersen:verify_ipa(
-             OpenG_sub_E_e, EV, Gs, Hs, Q, E),
+    io:fwrite("make proof\n"),
+    Proof = prove(As, Zs, Domain, P),
+    io:fwrite("verify proof\n"),
+    true = verify(Proof, Zs, Ys, P),
+    success;
+test(6) ->
+    Many = 100,
+    E = secp256k1:make(),
+    Base = secp256k1:order(E),
+    Root4 = primitive_nth_root(4, E),
+    Root4b = mul(Root4, Root4, Base),
+    Root4c = mul(Root4b, Root4, Base),
+    Domain = [1, Root4, Root4b, Root4c],
+    io:fwrite("setup parameters\n"),
+    P = make_parameters(Domain, E),
+    %Base = P#p.b,
+    io:fwrite("prepare values to commit\n"),
+    As = lists:map(fun(R) -> [sub(0, R, Base),
+                              sub(0, 3, Base),
+                              sub(0, 2, Base),
+                              sub(0, 1, Base)] end,
+                   range(0, Many)),
+    Zs = many(hd(Domain), Many),
+    Ys = lists:zipwith(
+           fun(F, Z) ->
+                   poly:eval_e(Z, F, Domain, Base)
+           end, As, Zs),
+    io:fwrite("make proof\n"),
+    %T1 = erlang:timestamp(),
+    Proof = prove(As, Zs, Domain, P),
+    T2 = erlang:timestamp(),
+    io:fwrite("verify proof\n"),
+    true = verify(Proof, Zs, Ys, P),
+    T3 = erlang:timestamp(),
+    io:fwrite("\n"),
+    {%timer:now_diff(T2, T1),
+     verify_time, timer:now_diff(T3, T2)}.
+%success.
+    
+                          
+    
 
-    G2 = calc_G2(R, 1, T, Ys, Zs, Base),
-
-    %less confident
-    %Neg_E_list = neg_calc_E(R, 1, T, Zs, Commits, E),%commits are related to Fs
-    %CommitNegE = pedersen:sum_up(Neg_E_list, E),
-    %CommitG_sub_E = pedersen:add(CommitG, CommitNegE, E),
-    %CommitG_sub_E = element(1, OpenG_sub_E),
-
-
-    Neg_E_list_e = neg_calc_E(R, 1, T, Zs, Commits_e, E),%commits are related to Fs
-    CommitNegE_e = pedersen:sum_up(Neg_E_list_e, E),
-    CommitG_sub_E_e = pedersen:add(CommitG_e, CommitNegE_e, E),
-    CommitG_sub_E_e = element(1, OpenG_sub_E_e),
-
-    0 = add(G2, element(2, OpenG_sub_E_e), Base),
-    success.
     
     
 

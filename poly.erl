@@ -15,9 +15,6 @@ symetric_view(X, Y) ->
         (X > Y2) -> X - Y;
         true -> X
     end.
-fpow(B, 0, _) -> 1;
-fpow(B, E, N) ->
-    basics:lrpow(B, E, N).
 fmul(A, B, N) ->
     mod(A*B, N).
 fdiv(A, B, N) ->
@@ -58,7 +55,7 @@ neg([H|T], Base) ->
 mul_scalar(_, [], _) -> [];
 mul_scalar(S, [A|T], Base) 
   when is_integer(S) -> 
-    [fmul(S, A, Base)|
+    [ff:mul(S, A, Base)|
      mul_scalar(S, T, Base)].
 add_all([P], _) -> P;
 add_all([A, B|T], Base) -> 
@@ -77,7 +74,7 @@ add_c([A|AT], [B|BT], Base) ->
 %evaluation form
 mul_e([], [], _) -> [];
 mul_e([A|AT], [B|BT], Base) ->
-    [fmul(A, B, Base)|
+    [ff:mul(A, B, Base)|
      mul_e(AT, BT, Base)].
 
 %coefficient form
@@ -119,7 +116,7 @@ div_c(A, B, Base) ->
             %io:fwrite({A, B}),
             LA = hd(lists:reverse(A)),
             LB = hd(lists:reverse(B)),
-            M = fdiv(LA, LB, Base),
+            M = ff:divide(LA, LB, Base),
             BM = mul_scalar(M, B, Base),
             %BM2 = all_zeros(D) ++ BM,
             BM2 = many(0, D) ++ BM,
@@ -137,7 +134,7 @@ div_c(A, B, Base) ->
 %if B contains no zero, it is easy:
 unused_div_e([], [], _Base) -> [];
 unused_div_e([A|AT], [B|BT], Base) ->
-    [fdiv(A, B, Base)|
+    [ff:divide(A, B, Base)|
      unused_div_e(AT, BT, Base)].
 
 remove_from([X|T], X) -> T;
@@ -153,7 +150,7 @@ div_e(Ps, Domain, DA, M, Base) ->
       fun(P, D) -> 
               if
                   not(D == M) -> 
-                      fdiv(
+                      ff:divide(
                         P, 
                         fsub(D, M, Base), 
                         Base);
@@ -171,12 +168,12 @@ div_e2(Ps, Domain, M, DA, DA_M, Base) ->
                       (D == M) -> 0;
                       true ->
                           MD = fsub(M, D, Base), 
-                          AMD = fmul(A, MD, Base),
-                          fdiv(P, AMD, Base)
+                          AMD = ff:mul(A, MD, Base),
+                          ff:divide(P, AMD, Base)
                   end
           end, Ps, Domain, DA),
     X2 = fadd_all(X, Base),
-    fmul(X2, DA_M, Base).
+    ff:mul(X2, DA_M, Base).
 
 grab_dam(M, [M|_], [D|_]) -> D;
 grab_dam(M, [_|T], D) -> 
@@ -218,9 +215,9 @@ eval_c(X, P, Base) ->
     eval_poly2(X, 1, P, Base).
 eval_poly2(_, _, [], _) -> 0;
 eval_poly2(X, XA, [H|T], Base) ->
-    fadd(fmul(H, XA, Base),
+    fadd(ff:mul(H, XA, Base),
          eval_poly2(
-           X, fmul(X, XA, Base), T, Base),
+           X, ff:mul(X, XA, Base), T, Base),
          Base).
 
 %evaluation format
@@ -234,8 +231,8 @@ eval_outside_v(Z, Domain, A, DA, Base) ->
     AZ = eval_c(Z, A, Base),
     lists:zipwith(
       fun(D, DAi) ->
-              fdiv(AZ,
-                   fmul(DAi,
+              ff:divide(AZ,
+                   ff:mul(DAi,
                         fsub(Z, D, Base),
                         Base),
                    Base)
@@ -247,7 +244,7 @@ eval_outside(Z, P, Domain, A, DA, Base) ->
     EV = eval_outside_v(Z, Domain, A, DA, Base),
     L = lists:zipwith(
           fun(PE, V) ->
-                  fmul(PE, V, Base)
+                  ff:mul(PE, V, Base)
           end, P, EV),
     fadd_all(L, Base).
     
@@ -273,7 +270,7 @@ lagrange_polynomial(R, N, Base) ->
            fun(X) -> fsub(N, X, Base) end, 
            R2),
     D = lists:foldl(
-          fun(X, A) -> fmul(X, A, Base) end, 
+          fun(X, A) -> ff:mul(X, A, Base) end, 
           1, Ds),
     %io:fwrite({D, P}),
     mul_scalar(inverse(D, Base), P,  Base).
@@ -302,7 +299,7 @@ powers(X, N, Base) ->
     powers2(X, 1, N, Base).
 powers2(_, _, 0, _) -> [];
 powers2(X, A, N, Base) ->
-    [A|powers2(X, fmul(A, X, Base), N-1, Base)].
+    [A|powers2(X, ff:mul(A, X, Base), N-1, Base)].
 
 %coefficient format
 commit_c(P, Gs, E) 
@@ -324,7 +321,7 @@ commit_e(P, Gs, Domain, E) ->
            fun(X, L) -> emul(L, X, E) end,
            P, Ls2),
     eadd_all(P2, E).
-                          
+
     
 test() ->                      
     E = secp256k1:make(),

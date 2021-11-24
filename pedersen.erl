@@ -35,7 +35,7 @@
 fadd(X, Y, E) when (is_integer(X) and
                     is_integer(Y) and
                     is_integer(E)) ->
-    (X + Y) rem E.
+    (X + Y) rem E;
 fadd(X, Y, E) when (is_integer(X) and
                     is_integer(Y)) ->
     N = order(E),
@@ -84,14 +84,19 @@ v_mul(S, [H|T], E) ->
      v_mul(S, T, E)].
 
 %pedersen vector commit.
-commit([], _, _) ->
+commit_old([], _, _) ->
     infinity;
-commit([V1], [G1], E) ->
+commit_old([V1], [G1], E) ->
     mul(G1, V1, E);
-commit(V, G, E) ->
+commit_old(V, G, E) ->
     add(mul(hd(G), hd(V), E),
         commit(tl(V), tl(G), E),
         E).
+commit(V, G, E) ->
+    G2 = lists:map(fun(X) -> secp256k1:to_jacob(X) end, G),
+    J = secp256k1:multi_exponent(V, G2, E),
+    secp256k1:to_affine(J, E).
+
 verify(G, V, C, Root, E) ->
     Root == commit([V, 1], [G, C], E).
 

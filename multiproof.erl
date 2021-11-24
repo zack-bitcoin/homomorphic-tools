@@ -128,6 +128,30 @@ neg_calc_E(R, RA, T, Zs, Commits, E) ->
      neg_calc_E(R, mul(RA, R, Base), T,
                 tl(Zs), tl(Commits), E)].
 
+mul_r_powers(_, _, [], _) -> [];
+mul_r_powers(R, A, [C|T], Base) ->
+    [ff:mul(C, A, Base)|
+     mul_r_powers(
+       R, ff:mul(A, R, Base), T, Base)].
+
+neg_calc_E2(R, T, Zs, Cs, E) ->
+    %sum_i  Ci*(R^i/(T-Zi))
+    Base = secp256k1:order(E),
+    Zs2 = lists:map(
+            fun(Z) -> ff:sub(T, Z, Base) end,
+            Zs),
+    Zs3 = secp256k1:invert_batch(Zs2, Base),
+    Zs4 = mul_r_powers(R, 1, Zs3, Base),
+    Zs5 = lists:map(
+            fun(Z) -> 
+                    ff:neg(Z, Base) 
+            end, Zs4),
+    Cs2 = lists:map(
+            fun(C) -> secp256k1:to_jacob(C) end,
+            Cs),
+    J = secp256k1:multi_exponent(Zs5, Cs2, E),%the slow part.
+    secp256k1:to_affine(J, E).
+
 
 
 %sum_i:  r^i * y_i / (t - z_i)
@@ -189,11 +213,15 @@ prove(As, %committed data
     Base = secp256k1:order(E),
     %io:fwrite("prove 0 G\n"),
     %io:fwrite({Gs}),
+
+    %todo, this should be read from the tree, because it is way too slow to calculate.
     Commits_e = lists:map(
                   fun(A) ->
                           poly:commit_c(A, Gs, E)
                   end, As),
     io:fwrite("prove 1 G\n"),
+
+    %todo, this can come from the tree as well.
     Ys = lists:zipwith(
            fun(F, Z) ->
                    poly:eval_e(Z, F, Domain, Base)
@@ -228,20 +256,29 @@ verify({CommitG, Commits, Open_G_E}, Zs, Ys,
     T = calc_T(CommitG, R),
     EV = poly:eval_outside_v(
            T, Domain, PA, DA, Base),
-    io:fwrite("verify ipa start\n"),
+    T3 = erlang:timestamp(),
+    io:fwrite("verify ipa start\n"),%0.3
     true = pedersen:verify_ipa(
              Open_G_E, EV, Gs, Hs, Q, E),
+    T4 = erlang:timestamp(),
     io:fwrite("verify ipa end\n"),
     io:fwrite("calc G2\n"),
     G2 = calc_G2(R, 1, T, Ys, Zs, Base),
+    T5 = erlang:timestamp(),
     io:fwrite("neg e list\n"),
-    Neg_E_list = %this is the slow step.
-        neg_calc_E(R, 1, T, Zs, Commits, E),%commits are related to Fs
-    io:fwrite("calc commit neg e\n"),
-    CommitNegE = pedersen:sum_up(Neg_E_list, E),
+    CommitNegE = neg_calc_E2(R, T, Zs, Commits, E),%the slow step
+    T6 = erlang:timestamp(),
     io:fwrite("calc commit g-e\n"),
     CommitG_sub_E = pedersen:add(CommitG, CommitNegE, E),
     CommitG_sub_E = element(1, Open_G_E),
+    io:fwrite("calc neg e: "),
+    io:fwrite(integer_to_list(timer:now_diff(T6, T5))),
+    io:fwrite("\n"),
+    %io:fwrite({timer:now_diff(T4, T3),%ipa
+    %           timer:now_diff(T5, T4),
+    %           timer:now_diff(T6, T5)
+               %timer:now_diff(T7, T6)
+%}),
     0 == add(G2, element(2, Open_G_E), Base).
 
 range(X, X) -> [];
@@ -496,9 +533,9 @@ test(5) ->
     true = verify(Proof, Zs, Ys, P),
     success;
 test(6) ->
-    Many = 300,
-    %verifies 45.5 per second
-    %we want ~120 000 per second. a factor of 2637 short.
+    Many = 10000,
+    %verifies 49 per second
+    %we want ~120 000 per second. a factor of 2500 short.
     %switching to jacob format saves about 5x.
     %bucket method saves about 24x
     %rewrite to C saves around 5x

@@ -3,11 +3,13 @@
          multiplication/3, gen_point/1,
          field_prime/1, order/1,
          on_curve/2,
-         mod/2,
+         mod/2, invert_batch/2,
 
          to_jacob/1, to_affine/2,
          jacob_mul/3, jacob_add/3, jacob_zero/0,
-         jacob_equal/3, jacob_negate/2, jacob_sub/3
+         jacob_equal/3, jacob_negate/2, jacob_sub/3,
+
+         multi_exponent/3
 ]).
 
 -define(pow_2_128, 340282366920938463463374607431768211456).
@@ -64,6 +66,8 @@ make() ->
 
 to_jacob({X, Y}) ->
     {X, Y, 1}.
+to_affine(P = {_, _, 0}, E) ->
+    infinity;
 to_affine(P = {_, _, Z}, E) ->
     Base = field_prime(E),
     Z2 = ff:inverse(Z, Base),
@@ -79,29 +83,28 @@ to_affine_batch(Ps, E) ->
     Base = field_prime(E),
     Zs = lists:map(fun({_, _, Z}) -> Z end, 
                    Ps),
-    Is = invert_batch(Zs, E),
+    Is = invert_batch(Zs, Base),
     lists:zipwith(
       fun(P, I) -> to_affine(P, I, E) end,
       Ps, Is).
    
-invertPies([], _, Pis, Acc) -> 
-    {lists:reverse(Pis), Acc};
-invertPies([0|T], E, Pis, Acc) -> 
-    invertPies(T, E, [0|Pis], Acc);
-invertPies([N|T], E, Pis, Acc) -> 
-    Base = field_prime(E),
-    invertPies(T, E, [Acc|Pis], 
-               ff:mul(N, Acc, Base)).
-invert_batch(Ns, E) ->                           
-    Base = field_prime(E),
-    {Pis, Acc} = invertPies(Ns, E, [], 1),
-    Acc2 = ff:inverse(Acc, Base),
-    lists:map(fun(P) -> 
-                      ff:mul(P, Acc2, Base)
-              end, Pis).
-                      
-                                       
-    
+pis([], _, _) -> [];
+pis([H|T], A, B) -> 
+    X = ff:mul(H, A, B),
+    [X|pis(T, X, B)].
+
+invert_batch(Vs, Base) ->
+    [All|V2] = lists:reverse(pis(Vs, 1, Base)),%[v16, v15, v14, v13, v12, v1]
+    AllI = ff:inverse(All, Base),%i16
+    VI = lists:map(
+           fun(V) -> ff:mul(AllI, V, Base) end,
+           V2), %[i6, i56, i46, i36, i26]
+    V3 = lists:reverse(pis(lists:reverse(Vs), 1, Base)),%[v16, v26, v36, v46, v56, v6]
+    V4 = tl(V3)++[1],%[v26, v36, v46, v56, v6, 1]
+    VI2 = [AllI|lists:reverse(VI)],%[i16, i26, i36, i46, i56, i6]
+    lists:zipwith(fun(A, B) ->
+                          ff:mul(A, B, Base)
+                  end, V4, VI2).
 
 jacob_negate({X, Y, Z}, E) ->
     Base = field_prime(E),
@@ -405,10 +408,6 @@ chunkify(R, C, Many) ->
 
 matrix_diagonal_flip([[]|_]) -> [];
 matrix_diagonal_flip(M) ->
-    %[[R1_0, R1_1, ...],
-    % [R2_0, R2_1, ...], ...
-    %[[R1_0, R2_0, R3_0, ...
-    % [R1_1, R2_1, ...
     Col = lists:map(fun(X) -> hd(X) end, M),
     Tls = lists:map(fun(X) -> tl(X) end, M),
     [Col|matrix_diagonal_flip(Tls)].
@@ -419,7 +418,6 @@ bucketify([], Buckets, [], E) ->
     %compute starting at the end. S7 + (S7 + S6) + (S7 + S6 + S5) ...
     T = tuple_to_list(Buckets),
     T2 = lists:reverse(T),
-    %T2 = T,
     bucketify2(tl(T2), hd(T2), hd(T2), E);
 bucketify([0|T], Buckets, [_|Gs], E) ->
     bucketify(T, Buckets, Gs, E);
@@ -439,43 +437,51 @@ bucketify2([S|R], L, T, E) ->
     T2 = jacob_add(L2, T, E),
     bucketify2(R, L2, T2, E).
 
-multi_exponent(Rs, Gs, E) ->
+remove_zero_terms([], [], A, B) ->
+    {lists:reverse(A), lists:reverse(B)};
+remove_zero_terms([0|R], [_|G], A, B) ->
+    remove_zero_terms(R, G, A, B);
+remove_zero_terms(R, G, A, B) ->
+    remove_zero_terms(
+      tl(R), tl(G), [hd(R)|A], [hd(G)|B]).
+
+
+multi_exponent(Rs0, Gs0, E) ->
     %output T.
     %T = R1*G1 + R2*G2 + ...
-    C = round(math:log(length(Rs))/math:log(2)),
+    {Rs, Gs} = remove_zero_terms(Rs0, Gs0, [], []),
+    multi_exponent2(Rs, Gs, E).
+multi_exponent2([], [], E) ->
+    jacob_zero();
+multi_exponent2(Rs, Gs, E) ->
+    %io:fwrite({Rs}),
+    C0 = round(math:log(length(Rs))/math:log(2)),
+    C = min(C0, 16),%more than 16 uses a lot of memory.
+    %C = max(C1, 4),
     F = det_pow(2, C),
     %write each integer in R in binary. partition the binaries into chunks of C bits.
     B = 256,
     R_chunks = 
         lists:map(
-          fun(R) -> L = chunkify(R, F, 1+(B div C)),
+          fun(R) -> L = chunkify(
+                          R, F, 1+(B div C)),
                     lists:reverse(L)
           end, Rs),
     %this break the problem up into 256/C instances of multi-exponentiation.
     %each multi-exponentiation has length(Gs) parts. What is different is that instead of the Rs having 256 bits, they only have C bits. each multi-exponentiation makes [T1, T2, T3...]
-    Ts = lists:reverse(matrix_diagonal_flip(R_chunks)),
+    Ts = matrix_diagonal_flip(R_chunks),
     Buckets = list_to_tuple(many(jacob_zero(), F)),
     Ss = lists:map(
            fun(X) -> 
                    bucketify(X, Buckets, Gs, E)
            end, Ts),
-    %io:fwrite({Ts, Ss}),
-    Out = me2(Ss, F, E),
-    %io:fwrite(Out),
-    Out.
-me2([X], _, _) -> X;
-me2([H|T], F, E) -> 
-    jacob_add(
-      H, 
-      jacob_mul(me2(T, F, E),
-                F, E),
-      E).
-    
-    %F = 2^C. T = T1 + F*T2 + F*F*T3 ... (use multilpy then add algorithm.) (maybe the Ts should be in the reverse order.)
-   
-    
-    
-
+    me3(Ss, jacob_zero(), F, E).
+me3([H], A, _, E) -> 
+    jacob_add(H, A, E);
+me3([H|T], A, F, E) -> 
+    X = jacob_add(H, A, E),
+    X2 = jacob_mul(X, F, E),
+    me3(T, X2, F, E).
 
 
 
@@ -606,6 +612,7 @@ test(10) ->
              E),
     success;
 test(11) ->
+    %tests multi-exponent
     E = make(),
     Base = field_prime(E),
     T_256 = det_pow(2, 256),
@@ -635,7 +642,19 @@ test(11) ->
     true = jacob_equal(Result, Result2, E),
     {timer:now_diff(T2, T1),
      timer:now_diff(T3, T2),
-     timer:now_diff(T4, T3)}.
+     timer:now_diff(T4, T3)};
+test(12) ->
+    %test invert_batch
+    E = make(),
+    Base = field_prime(E),
+    V = [1,2,3,4,5,6],
+    IV = invert_batch(V, Base),
+    V = invert_batch(IV, Base),
+    IV = lists:map(fun(X) -> basics:inverse(X, Base) end, V),
+    success.
+
+                           
+
     
 
 

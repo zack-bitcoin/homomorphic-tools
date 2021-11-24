@@ -50,7 +50,7 @@ sub(A, B, Base) ->
     add(A, neg(B, Base), Base).
 neg([], _Base) -> [];
 neg([H|T], Base) -> 
-    [fsub(0, H, Base)|
+    [ff:sub(0, H, Base)|
      neg(T, Base)].
 mul_scalar(_, [], _) -> [];
 mul_scalar(S, [A|T], Base) 
@@ -152,7 +152,7 @@ div_e(Ps, Domain, DA, M, Base) ->
                   not(D == M) -> 
                       ff:divide(
                         P, 
-                        fsub(D, M, Base), 
+                        ff:sub(D, M, Base), 
                         Base);
                   true -> 
                       DA_M = grab_dam(
@@ -167,7 +167,7 @@ div_e2(Ps, Domain, M, DA, DA_M, Base) ->
                   if
                       (D == M) -> 0;
                       true ->
-                          MD = fsub(M, D, Base), 
+                          MD = ff:sub(M, D, Base), 
                           AMD = ff:mul(A, MD, Base),
                           ff:divide(P, AMD, Base)
                   end
@@ -208,14 +208,14 @@ calc_DA(Domain, E) ->
 %coefficient format
 base_polynomial_c(Intercept, Base) ->
     % x - intercept
-    [fsub(0, Intercept, Base), 1].
+    [ff:sub(0, Intercept, Base), 1].
 
 %coefficient format
 eval_c(X, P, Base) -> 
     eval_poly2(X, 1, P, Base).
 eval_poly2(_, _, [], _) -> 0;
 eval_poly2(X, XA, [H|T], Base) ->
-    fadd(ff:mul(H, XA, Base),
+    ff:add(ff:mul(H, XA, Base),
          eval_poly2(
            X, ff:mul(X, XA, Base), T, Base),
          Base).
@@ -233,7 +233,7 @@ eval_outside_v(Z, Domain, A, DA, Base) ->
       fun(D, DAi) ->
               ff:divide(AZ,
                    ff:mul(DAi,
-                        fsub(Z, D, Base),
+                        ff:sub(Z, D, Base),
                         Base),
                    Base)
       end, Domain, DA).
@@ -267,7 +267,7 @@ lagrange_polynomial(R, N, Base) ->
           fun(X, A) -> mul_c(X, A, Base) end, 
           [1], Ps),
     Ds = lists:map(
-           fun(X) -> fsub(N, X, Base) end, 
+           fun(X) -> ff:sub(N, X, Base) end, 
            R2),
     D = lists:foldl(
           fun(X, A) -> ff:mul(X, A, Base) end, 

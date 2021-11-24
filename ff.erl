@@ -1,5 +1,6 @@
 -module(ff).
--export([sub/3, add/3, mul/3, divide/3, pow/3]).
+-export([sub/3, add/3, mul/3, divide/3, pow/3, 
+         inverse/2, neg/2]).
 
 mod(X,Y)->(X rem Y + Y) rem Y.
 symetric_view([], _) -> [];

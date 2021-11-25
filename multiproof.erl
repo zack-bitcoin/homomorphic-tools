@@ -140,7 +140,8 @@ neg_calc_E2(R, T, Zs, Cs, E) ->
     Zs2 = lists:map(
             fun(Z) -> ff:sub(T, Z, Base) end,
             Zs),
-    Zs3 = secp256k1:invert_batch(Zs2, Base),
+    %Zs3 = secp256k1:invert_batch(Zs2, Base),
+    Zs3 = ff:batch_inverse(Zs2, Base),
     Zs4 = mul_r_powers(R, 1, Zs3, Base),
     Zs5 = lists:map(
             fun(Z) -> 
@@ -554,7 +555,7 @@ test(6) ->
     %5000:  2.6972  1853   12
     %10000: 6.596   1516   13
 
-    Many = 5000,
+    Many = 1000,
     %verifies 49 per second
     %we want ~120 000 per second. a factor of 2500 short.
     %switching to jacob format saves about 5x.

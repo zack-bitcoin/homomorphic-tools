@@ -3,7 +3,7 @@
          multiplication/3, gen_point/1,
          field_prime/1, order/1,
          on_curve/2,
-         mod/2, invert_batch/2,
+         mod/2, 
 
          to_jacob/1, to_affine/2,
          jacob_mul/3, jacob_add/3, jacob_zero/0,
@@ -17,9 +17,10 @@
 -record(curve, {a, b, g, n, p, e}).
 
 %for fast operations mod the expected prime.
+%assumes the values are positive.
 -define(prime, 115792089237316195423570985008687907853269984665640564039457584007908834671663).
--define(sub(A, B), ((A - B + ?prime) rem ?prime)).
--define(neg(A), ((?prime - A) rem ?prime)).
+-define(sub(A, B), ((A - B + ?prime) rem ?prime)).%assumes B less than ?prime
+-define(neg(A), ((?prime - A) rem ?prime)).%assumes A less than ?prime
 -define(add(A, B), ((A + B) rem ?prime)).
 -define(mul(A, B), ((A * B) rem ?prime)).
                         
@@ -93,28 +94,29 @@ to_affine_batch(Ps, E) ->
     Base = field_prime(E),
     Zs = lists:map(fun({_, _, Z}) -> Z end, 
                    Ps),
-    Is = invert_batch(Zs, Base),
+    %Is = invert_batch(Zs, Base),
+    Is = ff:batch_inverse(Zs, Base),
     lists:zipwith(
       fun(P, I) -> to_affine(P, I, E) end,
       Ps, Is).
    
-pis([], _, _) -> [];
-pis([H|T], A, B) -> 
-    X = ff:mul(H, A, B),
-    [X|pis(T, X, B)].
+%pis([], _, _) -> [];
+%pis([H|T], A, B) -> 
+%    X = ff:mul(H, A, B),
+%    [X|pis(T, X, B)].
 
-invert_batch(Vs, Base) ->
-    [All|V2] = lists:reverse(pis(Vs, 1, Base)),%[v16, v15, v14, v13, v12, v1]
-    AllI = ff:inverse(All, Base),%i16
-    VI = lists:map(
-           fun(V) -> ff:mul(AllI, V, Base) end,
-           V2), %[i6, i56, i46, i36, i26]
-    V3 = lists:reverse(pis(lists:reverse(Vs), 1, Base)),%[v16, v26, v36, v46, v56, v6]
-    V4 = tl(V3)++[1],%[v26, v36, v46, v56, v6, 1]
-    VI2 = [AllI|lists:reverse(VI)],%[i16, i26, i36, i46, i56, i6]
-    lists:zipwith(fun(A, B) ->
-                          ff:mul(A, B, Base)
-                  end, V4, VI2).
+%invert_batch(Vs, Base) ->
+%    [All|V2] = lists:reverse(pis(Vs, 1, Base)),%[v16, v15, v14, v13, v12, v1]
+%    AllI = ff:inverse(All, Base),%i16
+%    VI = lists:map(
+%           fun(V) -> ff:mul(AllI, V, Base) end,
+%           V2), %[i6, i56, i46, i36, i26]
+%    V3 = lists:reverse(pis(lists:reverse(Vs), 1, Base)),%[v16, v26, v36, v46, v56, v6]
+%    V4 = tl(V3)++[1],%[v26, v36, v46, v56, v6, 1]
+%    VI2 = [AllI|lists:reverse(VI)],%[i16, i26, i36, i46, i56, i6]
+%    lists:zipwith(fun(A, B) ->
+%                          ff:mul(A, B, Base)
+%                  end, V4, VI2).
 
 jacob_negate({X, Y, Z}, E) ->
     %Base = field_prime(E),
@@ -493,7 +495,7 @@ multi_exponent2(Rs, Gs, E) ->
     C = max(1, C1),
     %C = min(C2, 9),
     if
-        (C1 > 4) ->
+        (C1 > 6) ->
             io:fwrite("C is "),
             io:fwrite(integer_to_list(C)),
             io:fwrite("\n");
@@ -691,8 +693,10 @@ test(12) ->
     E = make(),
     Base = field_prime(E),
     V = [1,2,3,4,5,6],
-    IV = invert_batch(V, Base),
-    V = invert_batch(IV, Base),
+    %IV = invert_batch(V, Base),
+    %V = invert_batch(IV, Base),
+    IV = ff:batch_inverse(V, Base),
+    V = ff:batch_inverse(IV, Base),
     IV = lists:map(fun(X) -> basics:inverse(X, Base) end, V),
     success.
 

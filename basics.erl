@@ -120,6 +120,7 @@ inverse(A, N) ->
             io:fwrite("inverse does not exist "),
             io:fwrite(integer_to_list(A)),
             io:fwrite("\n"),
+            1=2,
             does_not_exist;
         {G, S, T} ->
             case G of

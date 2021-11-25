@@ -90,9 +90,10 @@ commit_old([V1], [G1], E) ->
     mul(G1, V1, E);
 commit_old(V, G, E) ->
     add(mul(hd(G), hd(V), E),
-        commit(tl(V), tl(G), E),
+        commit_old(tl(V), tl(G), E),
         E).
 commit(V, G, E) ->
+    %io:fwrite("commit\n"),
     G2 = lists:map(fun(X) -> secp256k1:to_jacob(X) end, G),
     J = secp256k1:multi_exponent(V, G2, E),
     secp256k1:to_affine(J, E).

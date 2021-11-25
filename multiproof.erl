@@ -208,19 +208,14 @@ calc_T({C1, C2}, R) ->
 prove(As, %committed data
       Zs, %the slot in each commit we are reading from. A list as long as As. Made up of elements that are in the domain.
       Domain, %These are the coordinates we are using for lagrange basis. (This is probably the roots of unity)
+      Commits_e,
       #p{g = Gs, h = Hs, q = Q, e = E, da = DA,
         a = PA, ls = Ls}) ->
     Base = secp256k1:order(E),
     %io:fwrite("prove 0 G\n"),
     %io:fwrite({Gs}),
 
-    %todo, this should be read from the tree, because it is way too slow to calculate.
-    Commits_e = lists:map(
-                  fun(A) ->
-                          poly:commit_c(A, Gs, E)
-                  end, As),
     io:fwrite("prove 1 G\n"),
-
     %todo, this can come from the tree as well.
     Ys = lists:zipwith(
            fun(F, Z) ->
@@ -272,7 +267,11 @@ verify({CommitG, Commits, Open_G_E}, Zs, Ys,
     CommitG_sub_E = pedersen:add(CommitG, CommitNegE, E),
     CommitG_sub_E = element(1, Open_G_E),
     io:fwrite("calc neg e: "),
+    NegE = timer:now_diff(T6, T5),
     io:fwrite(integer_to_list(timer:now_diff(T6, T5))),
+    io:fwrite("\n"),
+    io:fwrite("proofs per second: "),
+    io:fwrite(integer_to_list(round(length(Zs) * 1000000 / NegE))),
     io:fwrite("\n"),
     %io:fwrite({timer:now_diff(T4, T3),%ipa
     %           timer:now_diff(T5, T4),
@@ -528,12 +527,34 @@ test(5) ->
                    poly:eval_e(Z, F, Domain, Base)
            end, As, Zs),
     io:fwrite("make proof\n"),
-    Proof = prove(As, Zs, Domain, P),
+    Gs = E#p.g,
+    Commits = lists:map(
+                  fun(A) ->
+                          poly:commit_c(A, Gs, E)
+                  end, As),
+    Proof = prove(As, Zs, Domain, Commits, P),
     io:fwrite("verify proof\n"),
     true = verify(Proof, Zs, Ys, P),
     success;
 test(6) ->
-    Many = 10000,
+
+    %10:    0.0128  781   
+    %100:   0.0690  1449   6
+    %500:           2229   6
+    %1000:          2600   7
+    %2000:  0.7669  2880   8
+    %3000:          3032   9
+    %4000:  1.4049  2959   9
+    %5000:          2918   10, 11 is worse 2502
+    %10000:         3000   11, 10: 2743, 12: 2179
+    %20000:         2500   12,
+
+    %3000:  1.3960  2149   11
+    %4000:  1.7172  2329   11
+    %5000:  2.6972  1853   12
+    %10000: 6.596   1516   13
+
+    Many = 5000,
     %verifies 49 per second
     %we want ~120 000 per second. a factor of 2500 short.
     %switching to jacob format saves about 5x.
@@ -550,18 +571,33 @@ test(6) ->
     %Base = P#p.b,
     io:fwrite("prepare values to commit\n"),
     As = lists:map(fun(R) -> [sub(0, R, Base),
-                              sub(0, 3, Base),
-                              sub(0, 2, Base),
-                              sub(0, 1, Base)] end,
+    %As = lists:map(fun(_R) -> [sub(0, 4, Base),
+                              sub(0, R+3, Base),
+                              sub(0, R+2, Base),
+                              sub(0, R+1, Base)] end,
                    range(0, Many)),
-    Zs = many(hd(Domain), Many),
+    Zs = many(hd(tl(Domain)), Many),
     Ys = lists:zipwith(
            fun(F, Z) ->
                    poly:eval_e(Z, F, Domain, Base)
            end, As, Zs),
+    Gs = P#p.g,
+%    Commits = lists:map(
+%                fun(A) ->
+                        %poly:commit_c(A, Gs, E)
+%                        pedersen:commit_old(A, Gs, E)
+%                end, As),
+    Commit1 = pedersen:commit(hd(As), Gs, E),
+    Commits = lists:map(
+      fun(A) ->
+                                                %poly:commit_c(A, Gs, E)
+              
+              pedersen:commit(A, Gs, E)
+              %Commit1
+      end, As),
     io:fwrite("make proof\n"),
     %T1 = erlang:timestamp(),
-    Proof = prove(As, Zs, Domain, P),
+    Proof = prove(As, Zs, Domain, Commits, P),
     T2 = erlang:timestamp(),
     io:fwrite("verify proof\n"),
     true = verify(Proof, Zs, Ys, P),

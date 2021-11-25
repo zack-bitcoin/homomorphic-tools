@@ -15,6 +15,16 @@
 -define(pow_2_128, 340282366920938463463374607431768211456).
 
 -record(curve, {a, b, g, n, p, e}).
+
+%for fast operations mod the expected prime.
+-define(prime, 115792089237316195423570985008687907853269984665640564039457584007908834671663).
+-define(sub(A, B), ((A - B + ?prime) rem ?prime)).
+-define(neg(A), ((?prime - A) rem ?prime)).
+-define(add(A, B), ((A + B) rem ?prime)).
+-define(mul(A, B), ((A * B) rem ?prime)).
+                        
+%-define(sub
+
 field_prime(C) -> C#curve.p.
 order(C) -> C#curve.n.
 
@@ -70,7 +80,7 @@ to_affine(P = {_, _, 0}, E) ->
     infinity;
 to_affine(P = {_, _, Z}, E) ->
     Base = field_prime(E),
-    Z2 = ff:inverse(Z, Base),
+    Z2 = ff:inverse(mod(Z, Base), Base),
     to_affine(P, Z2, E).
 to_affine({X, Y, _}, Inverse, E) ->
     Base = field_prime(E),
@@ -107,8 +117,9 @@ invert_batch(Vs, Base) ->
                   end, V4, VI2).
 
 jacob_negate({X, Y, Z}, E) ->
-    Base = field_prime(E),
-    {X, ff:sub(0, Y, Base), Z}.
+    %Base = field_prime(E),
+    %{X, ff:sub(0, Y, Base), Z}.
+    {X, ?neg(Y), Z}.
 
 jacob_equal({X1, Y1, Z1}, {X2, Y2, Z2}, E) ->
     Base = field_prime(E),
@@ -130,18 +141,19 @@ jacob_add({0, _, _}, P, E) -> P;
 jacob_add({_, 0, _}, P, E) -> P;
 jacob_add({X1, Y1, Z1}, {X2, Y2, Z2}, E) ->
     %http://hyperelliptic.org/EFD/g1p/auto-shortw-jacobian-0.html#addition-add-2007-bl 
-    Base = field_prime(E),
-    Z1Z1 = ff:mul(Z1, Z1, Base),
-    Z2Z2 = ff:mul(Z2, Z2, Base),
-    U1 = ff:mul(X1, Z2Z2, Base),
-    U2 = ff:mul(X2, Z1Z1, Base),
-    S1 = ff:mul(Y1, ff:mul(Z2, Z2Z2, Base), Base),
-    S2 = ff:mul(Y2, ff:mul(Z1, Z1Z1, Base), Base),
-    H = ff:sub(U2, U1, Base),
-    HH = ff:mul(H, H, Base),
-    I = ff:mul(4, HH, Base),
-    J = ff:mul(H, I, Base),
-    R = ff:mul(2, ff:sub(S2, S1, Base), Base),
+    %Base = field_prime(E),
+    Z1Z1 = ?mul(Z1, Z1),
+    Z2Z2 = ?mul(Z2, Z2),
+    U1 = ?mul(X1, Z2Z2),
+    U2 = ?mul(X2, Z1Z1),
+    S1 = ?mul(Y1, ?mul(Z2, Z2Z2)),
+    S2 = ?mul(Y2, ?mul(Z1, Z1Z1)),
+    H = ?sub(U2, U1),
+    HH = ?mul(H, H),
+    I = 4*HH,
+    J = ?mul(H, I),
+    %R = ff:mul(2, ff:sub(S2, S1, Base), Base),
+    R = 2 * ?sub(S2, S1),
     if
         (H == 0) and (R == 0) -> 
             %io:fwrite("same point\n"),
@@ -149,41 +161,49 @@ jacob_add({X1, Y1, Z1}, {X2, Y2, Z2}, E) ->
         (H == 0) ->
             jacob_zero();
         true ->
-    V = ff:mul(U1, I, Base),
-    RR = ff:mul(R, R, Base),
-    V2 = ff:mul(2, V, Base),
-    X3 = ff:sub(RR, ff:add(J, V2, Base), Base),
-    Y3 = ff:sub(
-           ff:mul(R, ff:sub(V, X3, Base), Base),
-           ff:mul(2, ff:mul(S1, J, Base), Base),
-           Base),
-    Z1pZ2 = ff:add(Z1, Z2, Base),
-    Z3 = ff:mul(
-           H, 
-           ff:sub(ff:mul(Z1pZ2, Z1pZ2, Base),
-                  ff:add(Z1Z1, Z2Z2, Base),
-                 Base),
-           Base),
-    %io:fwrite({X1, Y1, Z1}, {X3, Y3, Z3}),
-    {X3, Y3, Z3}
+            V = ?mul(U1, I),
+            RR = ?mul(R, R),
+            V2 = 2*V,
+            X3 = ?sub(RR, ?add(J, V2)),
+            Y3 = ?sub(?mul(R, ?sub(V, X3)),
+                      2*?mul(S1, J)),
+            Z1pZ2 = ?add(Z1, Z2),
+            Z3 = ?mul(H, ?sub(?mul(Z1pZ2, Z1pZ2),
+                              ?add(Z1Z1, Z2Z2))),
+            {X3, Y3, Z3}
     end.
-jacob_double({X1, Y1, Z1}, Curve) ->
+jacob_double({X1, Y1, Z1}, _Curve) ->
     %http://hyperelliptic.org/EFD/g1p/auto-shortw-jacobian-0.html#doubling-dbl-2009-l
-    Base = field_prime(Curve),
-    A = ff:mul(X1, X1, Base),
-    B = ff:mul(Y1, Y1, Base),
-    C = ff:mul(B, B, Base),
-    D1 = ff:add(X1, B, Base),
-    D2 = ff:mul(D1, D1, Base),
-    D3 = ff:sub(D2, ff:add(A, C, Base), Base),
-    D = ff:mul(2, D3, Base),
-    E = ff:mul(3, A, Base),
-    F = ff:mul(E, E, Base),
-    X3 = ff:sub(F, ff:mul(2, D, Base), Base),
-    Y3 = ff:sub(ff:mul(E, ff:sub(D, X3, Base), Base),
-                ff:mul(8, C, Base),
-                Base),
-    Z3 = ff:mul(2, ff:mul(Y1, Z1, Base), Base),
+    %Base = field_prime(Curve),
+    %A = ff:mul(X1, X1, Base),
+    A = ?mul(X1, X1),
+    %B = ff:mul(Y1, Y1, Base),
+    B = ?mul(Y1, Y1),
+    %C = ff:mul(B, B, Base),
+    C = ?mul(B, B),
+    %D1 = ff:add(X1, B, Base),
+    D1 = ?add(X1, B),
+    %D2 = ff:mul(D1, D1, Base),
+    D2 = ?mul(D1, D1),
+    %D3 = ff:sub(D2, ff:add(A, C, Base), Base),
+    D3 = ?sub(D2, ?add(A, C)),
+    %D = ff:mul(2, D3, Base),
+    D = 2 *D3,
+    %E = ff:mul(3, A, Base),
+    E = 3 * A,
+    %F = ff:mul(E, E, Base),
+    F = ?mul(E, E),
+    X3 = ?sub(F, ?mul(2, D)),
+    %Y3 = ff:sub(ff:mul(E, ff:sub(D, X3, Base), Base),
+    %            ff:mul(8, C, Base),
+    %            Base),
+    C8 = 8*C,
+    Y3 = ?sub(?mul(E, ?sub(D, X3)),
+                C8),
+    %Z3 = ff:mul(2, ff:mul(Y1, Z1, Base), Base),
+    %Z3a = ?mul(Y1, Z1),
+    Z3 = ?mul(2, ?mul(Y1, Z1)),
+    %Z3 = ffmul(2, ff:mul(Y1, Z1, Base), Base),
     {X3, Y3, Z3}.
 
     
@@ -449,14 +469,37 @@ remove_zero_terms(R, G, A, B) ->
 multi_exponent(Rs0, Gs0, E) ->
     %output T.
     %T = R1*G1 + R2*G2 + ...
-    {Rs, Gs} = remove_zero_terms(Rs0, Gs0, [], []),
+    Base = field_prime(E),
+    {Rs1, Gs} = 
+        remove_zero_terms(Rs0, Gs0, [], []),
+    Rs = lists:map(fun(X) -> mod(X, Base) end,
+                   Rs1),
     multi_exponent2(Rs, Gs, E).
 multi_exponent2([], [], E) ->
     jacob_zero();
 multi_exponent2(Rs, Gs, E) ->
     %io:fwrite({Rs}),
-    C0 = round(math:log(length(Rs))/math:log(2)),
-    C = min(C0, 16),%more than 16 uses a lot of memory.
+    %10000 -> 11
+    %2000 -> 8 or 9 
+    %100   -> 4
+
+    %20k 11 -> 3204
+    %20k 10 -> 3527
+    %10k 9 -> 3419
+
+
+    C0 = floor(math:log(length(Rs))/math:log(2))-2,
+    C1 = min(C0, 16),%more than 16 uses a lot of memory.
+    C = max(1, C1),
+    %C = min(C2, 9),
+    if
+        (C1 > 4) ->
+            io:fwrite("C is "),
+            io:fwrite(integer_to_list(C)),
+            io:fwrite("\n");
+        true -> ok
+    end,
+    %C = 16,
     %C = max(C1, 4),
     F = det_pow(2, C),
     %write each integer in R in binary. partition the binaries into chunks of C bits.
@@ -616,7 +659,7 @@ test(11) ->
     E = make(),
     Base = field_prime(E),
     T_256 = det_pow(2, 256),
-    Many = 1000,
+    Many = 200,
     Rs = lists:map(fun(_) ->
                            random:uniform(T_256) rem Base
                    end, many(1, Many)),

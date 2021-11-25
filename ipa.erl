@@ -61,8 +61,8 @@ v_mul(A, Bs, E) ->
 
 hash(X) when is_binary(X) ->
     crypto:hash(sha256, X).
-point_to_entropy(J, E) ->
-    {X, Y} = secp256k1:to_affine(J, E),
+point_to_entropy(J = {_, _, _}) ->
+    {X, Y} = secp256k1:to_affine(J),
     <<Z:256>> = hash(<<X:256, Y:256>>),
     Z.
     
@@ -72,7 +72,7 @@ make_ipa(A, B, G, H, Q, E) ->
     AGBH = add(AG, BH, E),
     AB = dot(A, B),
     C1 = add(AGBH, mul(AB, Q, E), E),
-    X = point_to_entropy(C1, E),
+    X = point_to_entropy(C1),
     Xi = basics:inverse(X, ?order),
     {Cs, AN, BN, CN} = 
         make_ipa2(C1, A, G, B, H, 
@@ -121,7 +121,16 @@ fold_cs(X, Xi, [Cl, Cr|Cs], E) ->
           E),
       fold_cs(X, Xi, Cs, E),
       E).
-    
+
+-define(comp(X), secp256k1:compress(X)).
+-define(deco(X), secp256k1:decompress(X)).
+
+compress({AG, AB, Cs, AN, BN, CN}) ->    
+    Cs2 = lists:map(fun(X) -> ?comp(X) end, Cs),
+    {?comp(AG), AB, Cs2, AN, BN, ?comp(CN)}.
+decompress({AG, AB, Cs, AN, BN, CN}) ->
+    Cs2 = lists:map(fun(X) -> ?deco(X) end, Cs),
+    {?deco(AG), AB, Cs2, AN, BN, ?deco(CN)}.
 
 verify_ipa({AG, AB, Cs, AN, BN, CN}, %the proof
            B, G, H, Q, E) ->
@@ -134,7 +143,7 @@ verify_ipa({AG, AB, Cs, AN, BN, CN}, %the proof
         not(EB) -> false;
         true ->
     
-            X = point_to_entropy(C1, E),
+            X = point_to_entropy(C1),
             Xi = basics:inverse(X, ?order),
             GN = get_gn(Xi, G, E),
             HN = get_gn(X, H, E),
@@ -210,8 +219,24 @@ test(2) ->
     {{make, timer:now_diff(T2, T1)},%     2246729
      {verify, timer:now_diff(T3, T2)},%   1570761
      {make2, timer:now_diff(T5, T4)},%   10728733
-     {verify2, timer:now_diff(T6, T5)}}.% 9816297
+     {verify2, timer:now_diff(T6, T5)}};% 9816297
 %new version creates the proof 4.5x faster, and verifies 6x faster.
+
+test(3) ->
+    %testing compression.
+    A = range(100, 108),
+    S = length(A),
+    E = secp256k1:make(),
+    {G, H, Q} = basis(S, E),
+    Bv = [0,0,0,1,1,0,0,0],%103+104 = 207
+    Proof = make_ipa(
+              A, Bv,%103+104 = 207
+              G, H, Q, E),
+    P2 = compress(Proof),
+    Proof2 = decompress(P2),%non-identical because jacobian format is not deterministic.
+    P2 = compress(Proof2),
+    success.
+
     
     
 

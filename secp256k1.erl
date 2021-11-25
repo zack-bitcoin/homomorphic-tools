@@ -5,7 +5,7 @@
          on_curve/2,
          mod/2, 
 
-         to_jacob/1, to_affine/2,
+         to_jacob/1, to_affine/1,
          jacob_mul/3, jacob_add/3, jacob_zero/0,
          jacob_equal/3, jacob_negate/2, jacob_sub/3,
 

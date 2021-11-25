@@ -1,5 +1,5 @@
 -module(ipa).
--export([test/1]).
+-export([make_ipa/6, verify_ipa/6, test/1]).
 %inner product arguments using pedersen commitments.
 %uses the secp256k1 library.
 
@@ -180,4 +180,38 @@ test(1) ->
               G, H, Q, E),
     true = verify_ipa(Proof, Bv, G, H, Q, E),
     true = verify_ipa(Proof2, Bv2, G, H, Q, E),
-    success.
+    success;
+test(2) ->
+    %comparing the speed between versions
+    A = range(100, 356),
+    S = length(A),
+    E = secp256k1:make(),
+    {G, H, Q} = basis(S, E),
+    B = range(200, 200 + length(A)),
+    T1 = erlang:timestamp(),
+    Proof = make_ipa(
+              A, B,
+              G, H, Q, E),
+    T2 = erlang:timestamp(),
+    true = verify_ipa(Proof, B, G, H, Q, E),
+    T3 = erlang:timestamp(),
+
+    E2 = E,
+    {G2, H2, Q2} = pedersen:basis(S, E2),
+    T4 = erlang:timestamp(),
+    Proof2 = pedersen:make_ipa(
+              A, B,
+              G2, H2, Q2, E2),
+    T5 = erlang:timestamp(),
+    true = pedersen:verify_ipa(
+             Proof2, B, G2, H2, Q2, E2),
+    T6 = erlang:timestamp(),
+
+    {{make, timer:now_diff(T2, T1)},%     2246729
+     {verify, timer:now_diff(T3, T2)},%   1570761
+     {make2, timer:now_diff(T5, T4)},%   10728733
+     {verify2, timer:now_diff(T6, T5)}}.% 9816297
+%new version creates the proof 4.5x faster, and verifies 6x faster.
+    
+    
+

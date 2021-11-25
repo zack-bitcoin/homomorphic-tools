@@ -9,7 +9,9 @@
          jacob_mul/3, jacob_add/3, jacob_zero/0,
          jacob_equal/3, jacob_negate/2, jacob_sub/3,
 
-         multi_exponent/3
+         multi_exponent/3,
+
+         compress/1, decompress/1
 ]).
 
 -define(pow_2_128, 340282366920938463463374607431768211456).
@@ -77,28 +79,42 @@ make() ->
 
 to_jacob({X, Y}) ->
     {X, Y, 1}.
-to_affine(P = {_, _, 0}, E) ->
-    infinity;
-to_affine(P = {_, _, Z}, E) ->
-    Base = field_prime(E),
-    Z2 = ff:inverse(mod(Z, Base), Base),
-    to_affine(P, Z2, E).
-to_affine({X, Y, _}, Inverse, E) ->
-    Base = field_prime(E),
-    P2 = ff:mul(Inverse, Inverse, Base),
-    P3 = ff:mul(Inverse, P2, Base),
-    {ff:mul(X, P2, Base),
-     ff:mul(Y, P3, Base)}.
+to_affine({_, _, 0}) -> infinity;
+to_affine(P = {_, _, Z}) ->
+    Z2 = ff:inverse(mod(Z, ?prime), ?prime),
+    to_affine(P, Z2).
+to_affine({X, Y, _}, Inverse) ->
+    P2 = ff:mul(Inverse, Inverse, ?prime),
+    P3 = ff:mul(Inverse, P2, ?prime),
+    {ff:mul(X, P2, ?prime),
+     ff:mul(Y, P3, ?prime)}.
     
-to_affine_batch(Ps, E) ->
-    Base = field_prime(E),
+to_affine_batch(Ps) ->
     Zs = lists:map(fun({_, _, Z}) -> Z end, 
                    Ps),
     %Is = invert_batch(Zs, Base),
-    Is = ff:batch_inverse(Zs, Base),
+    Is = ff:batch_inverse(Zs, ?prime),
     lists:zipwith(
-      fun(P, I) -> to_affine(P, I, E) end,
+      fun(P, I) -> to_affine(P, I) end,
       Ps, Is).
+compress({X, Y}) ->
+    %2 means even, 3 means odd??
+    if
+        ((Y rem 2) == 0) -> <<2, X:256>>;
+        true -> <<3, X:256>>
+    end;
+compress(J) ->
+    compress(to_affine(J)).
+decompress(<<S, X:256>>) ->
+    %Y*Y = X*X*X + 7
+    SqrtY = 7 + ?mul(X, ?mul(X, X)),
+    Y = ff:pow(SqrtY, (?prime + 1) div 4, ?prime),
+    Y2 = if
+             ((Y rem 2) == (S rem 2)) -> Y;
+             true -> ?prime - Y
+         end,
+    to_jacob({X, Y2}).
+            
    
 %pis([], _, _) -> [];
 %pis([H|T], A, B) -> 
@@ -382,7 +398,8 @@ gen_point(E) ->
     #curve{
            p = P
           } = E,
-    X = (random:uniform(det_pow(2, 256)) rem P),
+    <<X0:256>> = crypto:strong_rand_bytes(32),
+    X = X0 rem P,
     G = gen_point(E, X),
     case G of
         error -> gen_point(E);
@@ -554,13 +571,13 @@ test(4) ->
     G = gen_point(E),
     %G = {360, ff:sub(0, 360, Base)},
     Gj = to_jacob(G),
-    G = to_affine(Gj, E),
+    G = to_affine(Gj),
     G2 = addition(G, G, E),
     G3 = addition(G2, G, E),
     Gj2 = jacob_double(Gj, E), 
     Gj3 = jacob_add(Gj2, Gj, E), 
-    G2 = to_affine(Gj2, E),
-    G3 = to_affine(Gj3, E),
+    G2 = to_affine(Gj2),
+    G3 = to_affine(Gj3),
     success;
 test(5) ->
     E = make(),
@@ -600,8 +617,8 @@ test(8) ->
       jacob_equal(Z, jacob_zero(), E),
       jacob_equal(G, G, E),
       jacob_equal(jacob_add(Z, G, E), G, E),
-      to_affine(jacob_mul(G, 1000000000000, E), E),
-      to_affine(endo_mul(G, 1000000000000, E), E),
+      to_affine(jacob_mul(G, 1000000000000, E)),
+      to_affine(endo_mul(G, 1000000000000, E)),
       multiplication(G2, 1000000000000, E)};
 test(9) ->
     E = make(),
@@ -682,7 +699,7 @@ test(11) ->
     T2 = erlang:timestamp(),
     Result2 = multi_exponent(Rs, Gs, E),
     T3 = erlang:timestamp(),
-    to_affine(Result2, E),
+    to_affine(Result2),
     T4 = erlang:timestamp(),
     true = jacob_equal(Result, Result2, E),
     {timer:now_diff(T2, T1),
@@ -698,14 +715,11 @@ test(12) ->
     IV = ff:batch_inverse(V, Base),
     V = ff:batch_inverse(IV, Base),
     IV = lists:map(fun(X) -> basics:inverse(X, Base) end, V),
-    success.
-
-                           
-
-    
-
-
-    
-    
-
-
+    success;
+test(13) ->
+    E = make(),
+    J = to_jacob(gen_point(E)),
+    C = compress(J),
+    J = decompress(C),
+    %success.
+    {C, J}.

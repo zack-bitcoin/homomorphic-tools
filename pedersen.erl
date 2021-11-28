@@ -96,7 +96,7 @@ commit(V, G, E) ->
     %io:fwrite("commit\n"),
     G2 = lists:map(fun(X) -> secp256k1:to_jacob(X) end, G),
     J = secp256k1:multi_exponent(V, G2, E),
-    secp256k1:to_affine(J, E).
+    secp256k1:to_affine(J).
 
 verify(G, V, C, Root, E) ->
     Root == commit([V, 1], [G, C], E).

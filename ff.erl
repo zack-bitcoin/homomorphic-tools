@@ -1,5 +1,6 @@
 -module(ff).
--export([sub/3, add/3, mul/3, divide/3, pow/3, 
+-export([sub/3, add/3, mul/3, divide/3, 
+         pow/3, add_all/2,
          mod/2,
          inverse/2, batch_inverse/2, neg/2]).
 
@@ -28,6 +29,7 @@ divide(A, B, N) ->
 pow(_, 0, _) -> 1;
 pow(A, B, N) ->
     basics:lrpow(A, B, N).
+
 add_all([A], _) -> A;
 add_all([A, B|T], Base) -> 
     add_all([add(A, B, Base)|T], Base).

@@ -1,5 +1,8 @@
 -module(ipa).
--export([make_ipa/6, verify_ipa/6, test/1]).
+-export([make_ipa/6, verify_ipa/6,
+         mul/3, add/3, hash/1, commit/3, eq/3, 
+         basis/2,
+         test/1]).
 %inner product arguments using pedersen commitments.
 %uses the secp256k1 library.
 
@@ -38,10 +41,10 @@ commit(V, G, E) ->
 
 add(A, B, E) ->
     secp256k1:jacob_add(A, B, E).
-sub(A, B, E) ->
-    secp256k1:jacob_sub(A, B, E).
-double(A, E) ->
-    secp256k1:jacob_double(A, E).
+%sub(A, B, E) ->
+%    secp256k1:jacob_sub(A, B, E).
+%double(A, E) ->
+%    secp256k1:jacob_double(A, E).
 mul(X, G, E) ->
     %multiply point G by scalar X.
     secp256k1:jacob_mul(G, X, E).
@@ -58,6 +61,9 @@ v_mul(A, Bs, E) ->
       fun(B) ->
               mul(A, B, E)
       end, Bs).
+simplify_v(X) ->
+    %simplifies jacobian points to make the denomenator of the projective points = 1.
+    secp256k1:simplify_Zs_batch(X).
 
 hash(X) when is_binary(X) ->
     crypto:hash(sha256, X).
@@ -74,14 +80,15 @@ make_ipa(A, B, G, H, Q, E) ->
     C1 = add(AGBH, mul(AB, Q, E), E),
     X = point_to_entropy(C1),
     Xi = basics:inverse(X, ?order),
-    {Cs, AN, BN, CN} = 
+    {Cs0, AN, BN} = 
         make_ipa2(C1, A, G, B, H, 
                   Q, E, [C1], X, Xi), 
-    {AG, AB, Cs, AN, BN, CN}.
+    [AGf|Cs] = simplify_v([AG|Cs0]),
+    {AGf, AB, Cs, AN, BN}.
     
-make_ipa2(C1, [A], _, [B], _, _, _, Cs, _, _) ->
+make_ipa2(_C1, [A], _, [B], _, _, _, Cs, _, _) ->
     %maybe at this point we should compress some of this data so it is smaller to send.
-    {Cs, A, B, C1};
+    {Cs, A, B};
 make_ipa2(C1, A, G, B, H, Q, E, Cs, X, Xi) ->
     S2 = length(A) div 2,
     {Al, Ar} = lists:split(S2, A),
@@ -111,30 +118,43 @@ get_gn(X, G, E) ->
     S = length(G),
     S2 = S div 2,
     {Gl, Gr} = lists:split(S2, G),
-    G2 = v_add(Gl, v_mul(X, Gr, E), E),
+    Gr2 = v_mul(X, Gr, E),
+    Gr3 = simplify_v(Gr2),
+    G2 = v_add(Gl, Gr3, E),
+    %G2 = simplify_v(G20),
+    %G2 = v_add(Gl, v_mul(X, Gr, E), E),
     get_gn(X, G2, E).
-fold_cs(_, _, [C], _) -> C;
-fold_cs(X, Xi, [Cl, Cr|Cs], E) ->
-    add(
-      add(mul(X, Cl, E),
-          mul(Xi, Cr, E),
-          E),
-      fold_cs(X, Xi, Cs, E),
-      E).
+
+foldh_mul(_, _, [C], _) -> [C];
+foldh_mul(X, Xi, [L, R|C], E) -> 
+    [mul(X, L, E), mul(Xi, R, E)|
+     foldh_mul(X, Xi, C, E)].
+fold_cs(X, Xi, Cs, E) ->
+    Cs3 = foldh_mul(X, Xi, Cs, E),
+    lists:foldl(fun(A, B) ->
+                        add(A, B, E)
+                end, secp256k1:jacob_zero(), 
+                Cs3).
 
 -define(comp(X), secp256k1:compress(X)).
 -define(deco(X), secp256k1:decompress(X)).
 
-compress({AG, AB, Cs, AN, BN, CN}) ->    
-    Cs2 = lists:map(fun(X) -> ?comp(X) end, Cs),
-    {?comp(AG), AB, Cs2, AN, BN, ?comp(CN)}.
-decompress({AG, AB, Cs, AN, BN, CN}) ->
+compress({AG, AB, Cs, AN, BN}) ->    
+    [AG2|Cs2] = 
+        secp256k1:compress(
+          [AG|Cs]),
+    {AG2, AB, Cs2, AN, BN}.
+%    Cs2 = lists:map(fun(X) -> ?comp(X) end, Cs),
+%    {?comp(AG), AB, Cs2, AN, BN, ?comp(CN)}.
+decompress({AG, AB, Cs, AN, BN}) ->
     Cs2 = lists:map(fun(X) -> ?deco(X) end, Cs),
-    {?deco(AG), AB, Cs2, AN, BN, ?deco(CN)}.
+    {?deco(AG), AB, Cs2, AN, BN}.
 
-verify_ipa({AG, AB, Cs, AN, BN, CN}, %the proof
+verify_ipa({AG0, AB, Cs0, AN, BN}, %the proof
            B, G, H, Q, E) ->
     %we may need to decompress the proof at this point.
+    [AG|Cs] = simplify_v([AG0|Cs0]),
+    %[CN, AG|Cs] = [CN0, AG0|Cs0],
     C1 = hd(lists:reverse(Cs)),
     C1b = add(add(AG, commit(B, H, E), E), 
              mul(AB, Q, E), E),
@@ -183,7 +203,7 @@ test(1) ->
     Proof = make_ipa(
               A, Bv,%103+104 = 207
               G, H, Q, E),
-    {_, 207, _, _, _, _} = Proof,
+    {_, 207, _, _, _} = Proof,
     Proof2 = make_ipa(
               A, Bv2,%103+104 = 207
               G, H, Q, E),
@@ -193,6 +213,7 @@ test(1) ->
 test(2) ->
     %comparing the speed between versions
     A = range(100, 356),
+    %A = range(100, 132),
     S = length(A),
     E = secp256k1:make(),
     {G, H, Q} = basis(S, E),
@@ -205,21 +226,22 @@ test(2) ->
     true = verify_ipa(Proof, B, G, H, Q, E),
     T3 = erlang:timestamp(),
 
-    E2 = E,
-    {G2, H2, Q2} = pedersen:basis(S, E2),
-    T4 = erlang:timestamp(),
-    Proof2 = pedersen:make_ipa(
-              A, B,
-              G2, H2, Q2, E2),
-    T5 = erlang:timestamp(),
-    true = pedersen:verify_ipa(
-             Proof2, B, G2, H2, Q2, E2),
-    T6 = erlang:timestamp(),
+    %E2 = E,
+    %{G2, H2, Q2} = pedersen:basis(S, E2),
+    %T4 = erlang:timestamp(),
+%    Proof2 = pedersen:make_ipa(
+%              A, B,
+%              G2, H2, Q2, E2),
+%    T5 = erlang:timestamp(),
+%    true = pedersen:verify_ipa(
+%             Proof2, B, G2, H2, Q2, E2),
+%    T6 = erlang:timestamp(),
 
     {{make, timer:now_diff(T2, T1)},%     2246729
-     {verify, timer:now_diff(T3, T2)},%   1570761
-     {make2, timer:now_diff(T5, T4)},%   10728733
-     {verify2, timer:now_diff(T6, T5)}};% 9816297
+     {verify, timer:now_diff(T3, T2)}%,%   1570761
+%     {make2, timer:now_diff(T5, T4)},%   10728733
+%     {verify2, timer:now_diff(T6, T5)}%   9816297
+};
 %new version creates the proof 4.5x faster, and verifies 6x faster.
 
 test(3) ->

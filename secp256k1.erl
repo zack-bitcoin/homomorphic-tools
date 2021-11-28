@@ -5,11 +5,11 @@
          on_curve/2,
          mod/2, 
 
-         to_jacob/1, to_affine/1,
+         to_jacob/1, to_affine/1, to_affine_batch/1,
          jacob_mul/3, jacob_add/3, jacob_zero/0,
          jacob_equal/3, jacob_negate/2, jacob_sub/3,
 
-         multi_exponent/3,
+         multi_exponent/3, simplify_Zs_batch/1,
 
          compress/1, decompress/1
 ]).
@@ -21,10 +21,12 @@
 %for fast operations mod the expected prime.
 %assumes the values are positive.
 -define(prime, 115792089237316195423570985008687907853269984665640564039457584007908834671663).
+-define(prime_over4, 28948022309329048855892746252171976963317496166410141009864396001977208667916).%(?prime + 1) div 4
 -define(sub(A, B), ((A - B + ?prime) rem ?prime)).%assumes B less than ?prime
 -define(neg(A), ((?prime - A) rem ?prime)).%assumes A less than ?prime
 -define(add(A, B), ((A + B) rem ?prime)).
 -define(mul(A, B), ((A * B) rem ?prime)).
+
                         
 %-define(sub
 
@@ -88,27 +90,55 @@ to_affine({X, Y, _}, Inverse) ->
     P3 = ff:mul(Inverse, P2, ?prime),
     {ff:mul(X, P2, ?prime),
      ff:mul(Y, P3, ?prime)}.
+
+zero_spots([], _) -> [];
+zero_spots([0|T], N) -> 
+    [N|zero_spots(T, N+1)];
+zero_spots(T, N) -> 
+    zero_spots(tl(T), N+1).
+insert_zeros([], P, _) -> P;
+insert_zeros([N|T], P, N) ->
+    [{0,1}|insert_zeros(T, P, N+1)];
+insert_zeros(Ns, [P|T], M) ->
+    [P|insert_zeros(Ns, T, M+1)].
+
     
 to_affine_batch(Ps) ->
     Zs = lists:map(fun({_, _, Z}) -> Z end, 
                    Ps),
+    ZeroSpots = zero_spots(Zs, 0),
+    Zs2 = lists:filter(fun(X) -> not(X == 0) end,
+                       Zs),
+    Ps2 = lists:filter(
+            fun(P = {_, _, Z}) -> not(Z == 0) end,
+            Ps),
     %Is = invert_batch(Zs, Base),
-    Is = ff:batch_inverse(Zs, ?prime),
-    lists:zipwith(
-      fun(P, I) -> to_affine(P, I) end,
-      Ps, Is).
+    Is = ff:batch_inverse(Zs2, ?prime),
+    Ps3 = lists:zipwith(
+            fun(P, I) -> to_affine(P, I) end,
+            Ps2, Is),
+    insert_zeros(ZeroSpots, Ps3, 0).
+simplify_Zs_batch(Ps) ->
+    Ps2 = to_affine_batch(Ps),
+    lists:map(fun(X) -> to_jacob(X) end, Ps2).
+                      
 compress({X, Y}) ->
     %2 means even, 3 means odd??
     if
         ((Y rem 2) == 0) -> <<2, X:256>>;
         true -> <<3, X:256>>
     end;
+compress(L = [_|_]) ->
+    L2 = to_affine_batch(L),
+    lists:map(fun(X) -> compress(X) end, L2);
 compress(J) ->
     compress(to_affine(J)).
 decompress(<<S, X:256>>) ->
+    %todo, we need a way to batch this computation. the square root part is expensive.
+    %since the exponent and the modulus are the same every time, it seems like we should be able to precompute a lot of stuff.
     %Y*Y = X*X*X + 7
-    SqrtY = 7 + ?mul(X, ?mul(X, X)),
-    Y = ff:pow(SqrtY, (?prime + 1) div 4, ?prime),
+    YY = 7 + ?mul(X, ?mul(X, X)),
+    Y = ff:pow(YY, (?prime + 1) div 4, ?prime),
     Y2 = if
              ((Y rem 2) == (S rem 2)) -> Y;
              true -> ?prime - Y
@@ -243,28 +273,27 @@ addition(P1, P2, E) ->
                      and (not(Y1 == 0))) ->
                         %(A+(3*x1*x1))/(2*Y1)
                         ff:divide(
-                          ff:add(
+                          ?add(
                             A, 
-                            ff:mul(
-                              3, 
-                              ff:mul(X1, X1, N), 
-                              N), N),
-                          ff:mul(2, Y1, N), N);
+                             %?mul(
+                              3 *
+                              ?mul(X1, X1)),% N), 
+                              %N), N),
+                          ?mul(2, Y1), N);
                     (not (X1 == X2)) ->
                         %(y2-y1)/(x2-x1)
                         ff:divide(
-                          ff:sub(Y2, Y1, N),
-                          ff:sub(X2, X1, N), N)
+                          ?sub(Y2, Y1),
+                          ?sub(X2, X1), N)
                 end, 
             %X3 = mod(mod(M*M, N) - X1 - X2, N),
-            X3 = ff:sub(ff:mul(M, M, N),
-                        ff:add(X1, X2, N),
-                        N),
+            X3 = ?sub(?mul(M, M),
+                      ?add(X1, X2)),
             %Y3 = mod(mod(M * (X1 - X3), N) - Y1, N),
-            Y3 = ff:sub(
-                   ff:mul(
-                     M, ff:sub(X1, X3, N), N),
-                   Y1, N),
+            Y3 = ?sub(
+                   ?mul(
+                     M, ?sub(X1, X3)),
+                   Y1),
             {X3, Y3}
     end.
 
@@ -450,11 +479,12 @@ matrix_diagonal_flip(M) ->
     Col = lists:map(fun(X) -> hd(X) end, M),
     Tls = lists:map(fun(X) -> tl(X) end, M),
     [Col|matrix_diagonal_flip(Tls)].
-               
+
 bucketify([], Buckets, [], E) -> 
     %for each bucket, sum up the points inside. [S1, S2, S3, ...
     %T_i = S1 + 2*S2 + 3*S3 ... (this is another multi-exponent. a simpler one this time.)
     %compute starting at the end. S7 + (S7 + S6) + (S7 + S6 + S5) ...
+    %io:fwrite(Buckets),
     T = tuple_to_list(Buckets),
     T2 = lists:reverse(T),
     bucketify2(tl(T2), hd(T2), hd(T2), E);
@@ -470,7 +500,7 @@ bucketify([BucketNumber|T], Buckets, [G|Gs], E) ->
     Buckets2 = setelement(
                  BucketNumber, Buckets, Bucket2),
     bucketify(T, Buckets2, Gs, E).
-bucketify2([], L, T, E) -> T;
+bucketify2([], _L, T, _E) -> T;
 bucketify2([S|R], L, T, E) -> 
     L2 = jacob_add(S, L, E),
     T2 = jacob_add(L2, T, E),
@@ -508,9 +538,10 @@ multi_exponent2(Rs, Gs, E) ->
 
 
     C0 = floor(math:log(length(Rs))/math:log(2))-2,
-    C1 = min(C0, 16),%more than 16 uses a lot of memory.
+    C1 = min(C0, 10),%more than 10 uses a lot of memory.
     C = max(1, C1),
     %C = min(C2, 9),
+    %C = 11,
     if
         (C1 > 6) ->
             io:fwrite("C is "),
@@ -532,7 +563,9 @@ multi_exponent2(Rs, Gs, E) ->
     %this break the problem up into 256/C instances of multi-exponentiation.
     %each multi-exponentiation has length(Gs) parts. What is different is that instead of the Rs having 256 bits, they only have C bits. each multi-exponentiation makes [T1, T2, T3...]
     Ts = matrix_diagonal_flip(R_chunks),
-    Buckets = list_to_tuple(many(jacob_zero(), F)),
+    %io:fwrite(Ts),
+    Buckets = list_to_tuple(
+                many(jacob_zero(), F)),
     Ss = lists:map(
            fun(X) -> 
                    bucketify(X, Buckets, Gs, E)
@@ -541,6 +574,7 @@ multi_exponent2(Rs, Gs, E) ->
 me3([H], A, _, E) -> 
     jacob_add(H, A, E);
 me3([H|T], A, F, E) -> 
+    %maybe do all the multiplications first, then simplify, then do additions.
     X = jacob_add(H, A, E),
     X2 = jacob_mul(X, F, E),
     me3(T, X2, F, E).
@@ -678,33 +712,39 @@ test(11) ->
     E = make(),
     Base = field_prime(E),
     T_256 = det_pow(2, 256),
-    Many = 200,
+    Many = 100000,
+    %Many = 50000,%10 is best
+    %Many = 20000,%10 is best. 2 below estimate.
+    %Many = 2000,%8 is best.
     Rs = lists:map(fun(_) ->
-                           random:uniform(T_256) rem Base
+                           rand:uniform(T_256) rem Base
                    end, many(1, Many)),
+    G0 = to_jacob(gen_point(E)),
     Gs = lists:map(
            fun(_) ->
-                   to_jacob(gen_point(E))
+                   G0
+                   %to_jacob(gen_point(E))
            end, many(1, length(Rs))),
     
     
     T1 = erlang:timestamp(),
-    Ps = lists:zipwith(
-           fun(R, G) -> jacob_mul(G, R, E) end,
-           Rs, Gs),
-    Result = 
-        lists:foldl(
-          fun(A, B) -> jacob_add(A, B, E) end,
-          jacob_zero(), Ps),
+    %Ps0 = lists:zipwith(
+    %       fun(R, G) -> jacob_mul(G, R, E) end,
+    %       Rs, Gs),
+    %Ps = simplify_Zs_batch(Ps0),
+    %Result = 
+    %    lists:foldl(
+    %      fun(A, B) -> jacob_add(A, B, E) end,
+    %      jacob_zero(), Ps),
     T2 = erlang:timestamp(),
     Result2 = multi_exponent(Rs, Gs, E),
     T3 = erlang:timestamp(),
     to_affine(Result2),
     T4 = erlang:timestamp(),
-    true = jacob_equal(Result, Result2, E),
-    {timer:now_diff(T2, T1),
-     timer:now_diff(T3, T2),
-     timer:now_diff(T4, T3)};
+    %true = jacob_equal(Result, Result2, E),
+    {{naive_version, timer:now_diff(T2, T1) div Many},
+     {fast_version, timer:now_diff(T3, T2) div Many},
+     {compress_result, timer:now_diff(T4, T3) div Many}};
 test(12) ->
     %test invert_batch
     E = make(),
@@ -722,4 +762,63 @@ test(13) ->
     C = compress(J),
     J = decompress(C),
     %success.
-    {C, J}.
+    {C, J};
+test(14) ->
+    %jacobian with z=1 speed comparison.
+    E = make(),
+    G = gen_point(E),
+    G2 = gen_point(E),
+    Many = 1000,
+    Gs = many(G, Many),
+    G2s = many(G2, Many),
+    J = to_jacob(G),
+    J2 = to_jacob(G2),
+    %Gs = many(G, Many),
+    Js = many(J, Many),
+    J2s = many(J2, Many),
+    K = jacob_add(J, J2, E),
+    K2 = jacob_add(J, K, E),
+    Ks = many(K, Many),
+    K2s = many(K2, Many),
+
+    T1 = erlang:timestamp(),
+    %this version is like twice as fast.
+    lists:zipwith(
+      fun(A, B) -> jacob_add(A, B, E) end,
+      Js, J2s),
+    T2 = erlang:timestamp(),
+    lists:zipwith(
+      fun(A, B) -> jacob_add(A, B, E) end,
+      Ks, K2s),
+    T3 = erlang:timestamp(),
+    lists:zipwith(
+      fun(A, B) -> jacob_add(A, B, E) end,
+      Js, K2s),
+    T4 = erlang:timestamp(),
+    lists:map(fun(A) -> jacob_double(A, E) end,
+              Js),
+    T5 = erlang:timestamp(),
+    lists:map(fun(A) -> jacob_double(A, E) end,
+              Ks),
+    T6 = erlang:timestamp(),
+    lists:map(fun(A) -> addition(A, A, E) end,
+              Gs),
+    T7 = erlang:timestamp(),
+    lists:zipwith(fun(A, B) -> 
+                          addition(A, B, E) end,
+              Gs, G2s),
+    T8 = erlang:timestamp(),
+    
+    {{affine_double, timer:now_diff(T7, T6)},
+     {affine_add, timer:now_diff(T8, T7)},
+      {add_simple, timer:now_diff(T2, T1)},%0.006
+     {add_half, timer:now_diff(T4, T3)},%0.01
+     {add_full, timer:now_diff(T3, T2)},%0.014
+     {double_simple, timer:now_diff(T5, T4)},%0.005
+     {double_full, timer:now_diff(T6, T5)}%0.005
+    }.
+    
+
+    
+    
+

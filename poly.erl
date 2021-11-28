@@ -1,9 +1,17 @@
 -module(poly).
 -compile(export_all).
 
+%-export([calc_DA/2, c2e/3, lagrange_polynomials/2, calc_A/2, sub/3, div_e/5, mul_scalar/3, add/3, eval_e/4, eval_outside/6, 
+
 %library for dealing with polynomials over integers mod a prime.
 
 %finite field operations
+-define(order, 115792089237316195423570985008687907852837564279074904382605163141518161494337).
+-define(sub(A, B), ((A - B + ?order) rem ?order)).%assumes B less than ?order
+-define(neg(A), ((?order - A) rem ?order)).%assumes A less than ?order
+-define(add(A, B), ((A + B) rem ?order)).
+-define(mul(A, B), ((A * B) rem ?order)).
+
 mod(X,Y)->(X rem Y + Y) rem Y.
 symetric_view([], _) -> [];
 symetric_view([H|T], Y) ->
@@ -15,18 +23,11 @@ symetric_view(X, Y) ->
         (X > Y2) -> X - Y;
         true -> X
     end.
-fmul(A, B, N) ->
-    mod(A*B, N).
-fdiv(A, B, N) ->
-    B2 = basics:inverse(B, N),
-    fmul(A, B2, N).
-fadd(A, B, N) ->
-    mod(A+B, N).
-fsub(A, B, N) ->
-    mod(A-B, N).
-fadd_all([A], _) -> A;
-fadd_all([A, B|T], Base) -> 
-    fadd_all([fadd(A, B, Base)|T], Base).
+%fadd(A, B, N) ->
+%    mod(A+B, N).
+%fadd_all([A], _) -> A;
+%fadd_all([A, B|T], Base) -> 
+%    fadd_all([fadd(A, B, Base)|T], Base).
 inverse(X, Base) ->
     basics:inverse(X, Base).
 
@@ -44,7 +45,7 @@ eadd_all(V, E) ->
 %polynomial operations
 add([], [], _) -> [];
 add([A|AT], [B|BT], Base) ->
-    [fadd(A, B, Base)|
+    [ff:add(A, B, Base)|
       add(AT, BT, Base)].
 sub(A, B, Base) ->
     add(A, neg(B, Base), Base).
@@ -68,7 +69,7 @@ mul_c_all([A, B|T], Base) ->
 add_c([], B, _) -> B;
 add_c(B, [], _) -> B;
 add_c([A|AT], [B|BT], Base) ->
-    [fadd(A, B, Base)|
+    [ff:add(A, B, Base)|
       add_c(AT, BT, Base)].
 
 %evaluation form
@@ -96,7 +97,7 @@ many(_, 0) -> [];
 many(X, N) when (N > 0) -> 
     [X|many(X, N-1)].
 
-%coefficient form
+%coefficient form. 
 % O(length(A)*length(B)).
 div_c(A, [], _) -> A;%doesn't end a recursion. just a simple case.
 div_c(A, B, Base) -> 
@@ -132,10 +133,10 @@ div_c(A, B, Base) ->
 %evaluation format
 %assumes that the division is possible without a remainder.
 %if B contains no zero, it is easy:
-unused_div_e([], [], _Base) -> [];
-unused_div_e([A|AT], [B|BT], Base) ->
-    [ff:divide(A, B, Base)|
-     unused_div_e(AT, BT, Base)].
+%unused_div_e([], [], _Base) -> [];
+%unused_div_e([A|AT], [B|BT], Base) ->
+%    [ff:divide(A, B, Base)|
+%     unused_div_e(AT, BT, Base)].
 
 remove_from([X|T], X) -> T;
 remove_from([A|T], X) -> 
@@ -146,38 +147,52 @@ div_e(Ps, Domain, DA, M, Base) ->
     %calculates the polynomial P(x) / (x - M).
     %M is a point in the domain of polynomial P.
     %io:fwrite({Ps, DA, M}),
-    lists:zipwith(
-      fun(P, D) -> 
+    Dividends = 
+        lists:map(
+          fun(D) -> 
+                  X = ?sub(D, M),
+                  case X of
+                      0 -> 1;
+                      _ -> X
+                  end
+          end, Domain),
+    IDs = ff:batch_inverse(Dividends, ?order),
+          
+    lists:zipwith3(
+      fun(P, D, ID) -> 
               if
-                  not(D == M) -> 
-                      ff:divide(
-                        P, 
-                        ff:sub(D, M, Base), 
-                        Base);
+                  not(D == M) -> ?mul(P, ID);
                   true -> 
                       DA_M = grab_dam(
                                M, Domain, DA),
                       div_e2(Ps, Domain, M, 
                              DA, DA_M, Base)
               end
-      end, Ps, Domain).
+      end, Ps, Domain, IDs).
 div_e2(Ps, Domain, M, DA, DA_M, Base) ->
+    Divisors = 
+        lists:zipwith(
+          fun(D, A) ->
+                  if
+                      (D == M) -> 1;
+                      true ->
+                          ?mul(A, ?sub(M, D))
+                  end
+          end, Domain, DA),
+    IDs = ff:batch_inverse(Divisors, Base),
     X = lists:zipwith3(
-          fun(P, D, A) ->
+          fun(P, D, ID) ->
                   if
                       (D == M) -> 0;
-                      true ->
-                          MD = ff:sub(M, D, Base), 
-                          AMD = ff:mul(A, MD, Base),
-                          ff:divide(P, AMD, Base)
+                      true -> ?mul(P, ID)
                   end
-          end, Ps, Domain, DA),
-    X2 = fadd_all(X, Base),
-    ff:mul(X2, DA_M, Base).
+          end, Ps, Domain, IDs),
+    X2 = ff:add_all(X, Base),
+    ?mul(X2, DA_M).
 
 grab_dam(M, [M|_], [D|_]) -> D;
-grab_dam(M, [_|T], D) -> 
-    grab_dam(M, T, tl(D)).
+grab_dam(M, [_|T], [_|D]) -> 
+    grab_dam(M, T, D).
    
 calc_A(Domain, Base) -> 
     %in roots of unity case, it is (x^d - 1)
@@ -208,7 +223,8 @@ calc_DA(Domain, E) ->
 %coefficient format
 base_polynomial_c(Intercept, Base) ->
     % x - intercept
-    [ff:sub(0, Intercept, Base), 1].
+    %[ff:sub(0, Intercept, Base), 1].
+    [?order - Intercept, 1].
 
 %coefficient format
 eval_c(X, P, Base) -> 
@@ -229,14 +245,16 @@ eval_e(X, [_|P], [_|D], Base) ->
 %DA is also in evaluation format
 eval_outside_v(Z, Domain, A, DA, Base) ->
     AZ = eval_c(Z, A, Base),
-    lists:zipwith(
-      fun(D, DAi) ->
-              ff:divide(AZ,
-                   ff:mul(DAi,
-                        ff:sub(Z, D, Base),
-                        Base),
-                   Base)
-      end, Domain, DA).
+    Divisors = 
+        lists:zipwith(
+          fun(D, Dai) -> ?mul(Dai, ?sub(Z, D))
+          end, Domain, DA),
+    IDs = ff:batch_inverse(Divisors, Base),
+    lists:map(
+      fun(D) ->
+              ?mul(AZ, D)
+      end, IDs).
+    
     
 eval_outside(Z, P, Domain, A, DA, Base) ->
     %Z is a point not in domain.
@@ -246,7 +264,7 @@ eval_outside(Z, P, Domain, A, DA, Base) ->
           fun(PE, V) ->
                   ff:mul(PE, V, Base)
           end, P, EV),
-    fadd_all(L, Base).
+    ff:add_all(L, Base).
     
 
 remove_element(X, [X|T]) -> T;

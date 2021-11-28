@@ -1,7 +1,19 @@
-looking at the zero knowledge proof that is test(4) of the polynomial commitments page.
+we can simplify Z in the buckets to save a lot of time.
+right before we run bucketify2.
+also, we each bucket should be a list, don't start summing until it is all ready.
 
-* clean it up, so it is clearer which parts are being done by the verifier and prover,
 
-* double check that we aren't leaking any private information.
 
-* There are some tricks we can do to make it faster. like using a compiled language for the elliptic curve, and switching to a curve that is optimized for speed.
+secp256k1:multi_exponent2 should simplify Ss.
+but first we need to teach to_affine_batch to work correctly even if some of the values are 0.
+
+secp256k1:me3. we should simplify between operations.
+
+
+
+multiproof.erl, update to use jacob format.
+
+poly.erl, don't export things we aren't using.
+
+start setting up the verkle tree. make sure we can update pedersen commitments without needing to recreate them.
+we need to set up some default generator points.

@@ -1,24 +1,39 @@
 -module(multiproof).
--export([test/1]).
+-export([test/1, 
+         compress/1, decompress/1,
+         make_parameters_jacob/2, 
+         primitive_nth_root/2,
+         prove_jacob/4, verify_jacob/4
+        ]).
 
 %multiproofs for pedersen IPA.
 %We are trying merge IPA.
 
 %going through this paper: https://dankradfeist.de/ethereum/2021/06/18/pcs-multiproofs.html
 
-%vitalik wrote a little on this topic as well: https://vitalik.ca/general/2021/06/18/verkle.html
+%vitalik wrote on this topic as well: https://vitalik.ca/general/2021/06/18/verkle.html
 
 -record(p, {e, b, g, h, q, domain, a, da, ls}).
 
-make_parameters(Domain, E) ->
+-define(order, 115792089237316195423570985008687907852837564279074904382605163141518161494337).
+-define(mul(A, B), ((A * B) rem ?order)).
+
+make_parameters_jacob(Domain, E) ->
+    {Gs, Hs, Q} = ipa:basis(4, E),
+    make_parameters2(Domain, E, Gs, Hs, Q).
+make_parameters2(Domain, E, Gs, Hs, Q) ->
     Base = secp256k1:order(E),
-    {Gs, Hs, Q} = pedersen:basis(4, E),
-    DAC = poly:calc_DA(Domain, E),
-    DA = poly:c2e(DAC, Domain, Base),
+    DAC = poly:calc_DA(Domain, E),%derivative of polynomial PA in coefficient format.
+    DA = poly:c2e(DAC, Domain, Base),%now evaluation format.
     Ls = poly:lagrange_polynomials(Domain, Base),
     PA = poly:calc_A(Domain, Base),
-    #p{e = E, b = Base, g = Gs, h = Hs, q = Q,
-       domain = Domain, a = PA, da = DA, ls = Ls}.
+    #p{e = E, %the elliptic curve settings.
+       b = Base, %group order of the elliptic curve.
+       g = Gs, h = Hs, q = Q,%a bunch of elliptic curve points.
+       domain = Domain, %the locations in the polynomial where we store information.
+       a = PA, %all the base polynomials of the domain multiplied together.
+       da = DA, %the finite derivative of PA. used along with PA to calculate values for the evaluation format polynomial outside of the domain.
+       ls = Ls}.
     
 
 primitive_nth_root(N, E) ->
@@ -32,16 +47,9 @@ primitive_nth_root(N, E) ->
     GP = basics:lrpow(G, N div 2, Base),
     if
         (GP == 1) ->
-            %fail;
             primitive_nth_root(N, E);
         true -> G
     end.
-
-add_polys([P], _) -> P;
-add_polys([A, B|T], Base) -> 
-    PC = polynomial_commitments,
-    add_polys([PC:add_poly(A, B, Base)|
-               T], Base).
 
 calc_G_e(R, As, Ys, Zs, Domain, DA, Base) ->
     GP = lists:zipwith3(
@@ -69,33 +77,12 @@ calc_G_e_helper(RA, R, [P|T], Base) ->
             poly:add(
               X,
               calc_G_e_helper(
-                poly:fmul(RA, R, Base), 
+                %poly:fmul(RA, R, Base), 
+                ?mul(RA, R), 
                 R, T, Base),
               Base)
     end.
     
-calc_G(R, Fs, Ys, Zs, Base) ->
-    %polynomials in coefficient format.
-    PC = polynomial_commitments,
-    GP = lists:zipwith3(
-           fun(F, Y, Z) ->
-                   PC:div_poly(
-                     PC:subtract_poly(
-                       F, 
-                       [Y], %eval(Z, F)
-                       Base),
-                     PC:base_polynomial(Z, Base),
-                     Base)
-           end, Fs, Ys, Zs),
-    calc_G_helper(1, R, GP, Base).
-calc_G_helper(_, _, [], _) -> [];
-calc_G_helper(RA, R, [P|T], Base) -> 
-    PC = polynomial_commitments,
-    PC:add_poly(
-      PC:mul_poly_c(RA, P, Base),
-      calc_G_helper(pedersen:fmul(RA, R, Base), R, T, Base),
-      Base).
-
 mod(X,Y)->(X rem Y + Y) rem Y.
 sub(A, B, Base) ->
     mod(A - B, Base).
@@ -108,80 +95,38 @@ divide(A, B, N) ->
     mul(A, B2, N).
     
 
-%map_i:  Commit_i * r^i / (t - z_i)
-calc_E(_, _, _, _, [], _) -> [];
-calc_E(R, RA, T, Zs, Commits, E) ->
-    Base = secp256k1:order(E),
-    [pedersen:mul(
-       hd(Commits), 
-       divide(RA, sub(T, hd(Zs), Base), Base),
-       E)|
-     calc_E(R, mul(RA, R, Base), T,
-            tl(Zs), tl(Commits), E)].
-neg_calc_E(_, _, _, _, [], _) -> [];
-neg_calc_E(R, RA, T, Zs, Commits, E) ->
-    Base = secp256k1:order(E),
-    Exp = sub(0, 
-           divide(RA, sub(T, hd(Zs), Base), Base),
-           Base),
-    [pedersen:mul(hd(Commits), Exp, E)|
-     neg_calc_E(R, mul(RA, R, Base), T,
-                tl(Zs), tl(Commits), E)].
-
 mul_r_powers(_, _, [], _) -> [];
 mul_r_powers(R, A, [C|T], Base) ->
     [ff:mul(C, A, Base)|
      mul_r_powers(
        R, ff:mul(A, R, Base), T, Base)].
 
-neg_calc_E2(R, T, Zs, Cs, E) ->
-    %sum_i  Ci*(R^i/(T-Zi))
-    Base = secp256k1:order(E),
-    Zs2 = lists:map(
-            fun(Z) -> ff:sub(T, Z, Base) end,
-            Zs),
-    %Zs3 = secp256k1:invert_batch(Zs2, Base),
-    Zs3 = ff:batch_inverse(Zs2, Base),
-    Zs4 = mul_r_powers(R, 1, Zs3, Base),
-    Zs5 = lists:map(
-            fun(Z) -> 
-                    ff:neg(Z, Base) 
-            end, Zs4),
-    Cs2 = lists:map(
-            fun(C) -> secp256k1:to_jacob(C) end,
-            Cs),
-    J = secp256k1:multi_exponent(Zs5, Cs2, E),%the slow part.
-    secp256k1:to_affine(J, E).
-
-
-
 %sum_i:  r^i * y_i / (t - z_i)
-calc_G2(_, _, _, [], [], _) -> 0;
-calc_G2(R, RA, T, Ys, Zs, Base) ->
-    Top = mul(RA, hd(Ys), Base),
-    Bottom = sub(T, hd(Zs), Base),
-    add(divide(Top, Bottom, Base),
-        calc_G2(R, mul(RA, R, Base), 
-                T, tl(Ys), tl(Zs), Base),
-        Base).
+calc_G2_2(R, T, Ys, Zs, Base) ->
+    Divisors = 
+        lists:map(fun(Z) -> sub(T, Z, Base) end, Zs),
+    IDs = ff:batch_inverse(Divisors, Base),
+    RIDs = mul_r_powers(R, 1, IDs, Base),
+
+    L1 = lists:zipwith(
+          fun(Y, I) -> ?mul(Y, I) end,
+          Ys, RIDs),
+    Result = ff:add_all(L1, Base),
+    {RIDs, Result}.
+
+%    L = lists:zipwith(
+%          fun(Y, I) -> ?mul(Y, I) end,
+%          Ys, IDs),
+%    Result = poly:eval_c(R, L, Base),
+%    Result.
+                  
+                                 
 
 %sum_i: (r^i)/(t - z_i)
-calc_H(_, _, _, [], [], _) -> [];
-calc_H(R, RA, T, Fs, Zs, E) ->
-    Base = secp256k1:order(E),
-    PC = polynomial_commitments,
-    PC:add_poly(
-      PC:mul_poly_c(
-        divide(RA, sub(T, hd(Zs), Base), Base),
-        hd(Fs), Base),
-      calc_H(R, mul(RA, R, Base), T, tl(Fs),
-             tl(Zs), E),
-      Base).
-
 calc_H_e(_, _, _, [], [], _) -> [];
 calc_H_e(R, RA, T, As, Zs, Base) ->
     X = poly:mul_scalar(
-          divide(RA, sub(T, hd(Zs), Base), Base),
+          divide(RA, sub(T, hd(Zs), Base), Base),%todo, try to batch this division
           hd(As),
           Base),
     if
@@ -203,84 +148,101 @@ calc_R([{C1, C2}|CT], [Z|ZT], [Y|YT], B) ->
     calc_R(CT, ZT, YT, B2).
 calc_T({C1, C2}, R) ->
     B = <<C1:256, C2:256, R:256>>,
-    <<R2:256>> = pedersen:hash(B),
+    <<R2:256>> = ipa:hash(B),
     R2.
 
-prove(As, %committed data
+-define(deco(X), secp256k1:decompress(X)).
+-define(comp(X), secp256k1:compress(X)).
+compress({C1, Csa, {AG, AB, Csb, AN, BN}}) ->
+    Cs0 = Csa ++ Csb,
+    [AG2, C2|Cs1] = ?comp([AG, C1|Cs0]),
+    {Csa2, Csb2} = lists:split(length(Csa), Cs1),
+    {C2, Csa2, {AG2, AB, Csb2, AN, BN}}.
+
+decompress({C2, Csa2, Cipa}) ->
+    Csa = lists:map(fun(X) -> ?deco(X) end, Csa2),
+    Ipa = ipa:decompress(Cipa),
+    {?deco(C2), Csa, Ipa}.
+    
+    
+
+prove_jacob(As, %committed data
       Zs, %the slot in each commit we are reading from. A list as long as As. Made up of elements that are in the domain.
-      Domain, %These are the coordinates we are using for lagrange basis. (This is probably the roots of unity)
       Commits_e,
       #p{g = Gs, h = Hs, q = Q, e = E, da = DA,
-        a = PA, ls = Ls}) ->
+        a = PA, domain = Domain}) ->
     Base = secp256k1:order(E),
-    %io:fwrite("prove 0 G\n"),
-    %io:fwrite({Gs}),
-
-    io:fwrite("prove 1 G\n"),
-    %todo, this can come from the tree as well.
     Ys = lists:zipwith(
            fun(F, Z) ->
                    poly:eval_e(Z, F, Domain, Base)
            end, As, Zs),
-    io:fwrite("prove 2 G\n"),
+    AffineCommits = 
+        secp256k1:to_affine_batch(
+          Commits_e),
     Timestamp1 = erlang:timestamp(),
-    R = calc_R(Commits_e, Zs, Ys, <<>>),
+    R = calc_R(AffineCommits, Zs, Ys, <<>>),
     G2 = calc_G_e(R, As, Ys, Zs, Domain, DA, Base),
-    CommitG_e = pedersen:commit(G2, Gs, E),
-    T = calc_T(CommitG_e, R),
-    GT = poly:eval_outside(T, G2, Domain, PA, DA, Base),
+    CommitG_e = ipa:commit(G2, Gs, E),
+    T = calc_T(secp256k1:to_affine(CommitG_e), R),
+    %GT = poly:eval_outside(T, G2, Domain, PA, DA, Base),
     He = calc_H_e(R, 1, T, As, Zs, Base),
     G_sub_E_e = poly:sub(G2, He, Base),
     EV = poly:eval_outside_v(T, Domain, PA, DA, Base),
     Timestamp2 = erlang:timestamp(),
-    OpenG_sub_E_e = pedersen:make_ipa(
-                     G_sub_E_e, EV,
-                     Gs, Hs, Q, E),
+    IPA = ipa:make_ipa(G_sub_E_e, EV, 
+                       Gs, Hs, Q, E),
     Timestamp3 = erlang:timestamp(),
     io:fwrite("ipa time : "),
     io:fwrite(integer_to_list(timer:now_diff(Timestamp3, Timestamp2))),
     io:fwrite("\n"),
-    io:fwrite("other proving time: "),
-    io:fwrite(integer_to_list(timer:now_diff(Timestamp2, Timestamp1))),
-    io:fwrite("\n"),
-    {CommitG_e, Commits_e, OpenG_sub_E_e}.
-verify({CommitG, Commits, Open_G_E}, Zs, Ys, 
+%    io:fwrite("other proving time: "),
+%    io:fwrite(integer_to_list(timer:now_diff(Timestamp2, Timestamp1))),
+%    io:fwrite("\n"),
+    {CommitG_e, Commits_e, IPA}.
+verify_jacob({CommitG, Commits, Open_G_E}, Zs, Ys, 
        #p{g = Gs, h = Hs, q = Q, e = E,
          domain = Domain, da = DA, a = PA}) ->
+    %io:fwrite({CommitG0, Commits0, Cs0}),
+%    {[CommitG|Commits], Cs} = 
+%        lists:split(length(Commits0)+1, 
+%                    secp256k1:simplify_Zs_batch(
+%                      [CommitG0|Commits0] ++ Cs0)),
+   
+%    Open_G_E = setelement(3, Open_G_E0, Cs),
+    T1 = erlang:timestamp(),
     Base = secp256k1:order(E),
-    R = calc_R(Commits, Zs, Ys, <<>>),
-    T = calc_T(CommitG, R),
+    [ACG|AffineCommits] = 
+        secp256k1:to_affine_batch(
+          [CommitG|Commits]),
+    T2 = erlang:timestamp(),
+    R = calc_R(AffineCommits, Zs, Ys, <<>>),
+    T3 = erlang:timestamp(),
+    T = calc_T(ACG, R),
     EV = poly:eval_outside_v(
            T, Domain, PA, DA, Base),
-    T3 = erlang:timestamp(),
-    io:fwrite("verify ipa start\n"),%0.3
-    true = pedersen:verify_ipa(
-             Open_G_E, EV, Gs, Hs, Q, E),
     T4 = erlang:timestamp(),
-    io:fwrite("verify ipa end\n"),
-    io:fwrite("calc G2\n"),
-    G2 = calc_G2(R, 1, T, Ys, Zs, Base),
+    true = ipa:verify_ipa(
+             Open_G_E, EV, Gs, Hs, Q, E),
     T5 = erlang:timestamp(),
-    io:fwrite("neg e list\n"),
-    CommitNegE = neg_calc_E2(R, T, Zs, Commits, E),%the slow step
+    {RIDs, G2} = calc_G2_2(R, T, Ys, Zs, Base),
     T6 = erlang:timestamp(),
-    io:fwrite("calc commit g-e\n"),
-    CommitG_sub_E = pedersen:add(CommitG, CommitNegE, E),
-    CommitG_sub_E = element(1, Open_G_E),
-    io:fwrite("calc neg e: "),
-    NegE = timer:now_diff(T6, T5),
-    io:fwrite(integer_to_list(timer:now_diff(T6, T5))),
+    %sum_i  Ci*(R^i/(T-Zi))
+    CommitNegE = secp256k1:multi_exponent(lists:map(fun(X) -> ff:neg(X, Base) end, RIDs), Commits, E), %this one got slower. todo
+    T7 = erlang:timestamp(),
+    
+    CommitG_sub_E = ipa:add(CommitG, CommitNegE, E),
+    T8 = erlang:timestamp(),
+    true = ipa:eq(CommitG_sub_E, element(1, Open_G_E), E),
+    T9 = erlang:timestamp(),
+    NegE = timer:now_diff(T7, T6),
+    io:fwrite(integer_to_list(timer:now_diff(T4, T3))),
     io:fwrite("\n"),
     io:fwrite("proofs per second: "),
     io:fwrite(integer_to_list(round(length(Zs) * 1000000 / NegE))),
     io:fwrite("\n"),
-    %io:fwrite({timer:now_diff(T4, T3),%ipa
-    %           timer:now_diff(T5, T4),
-    %           timer:now_diff(T6, T5)
-               %timer:now_diff(T7, T6)
-%}),
     0 == add(G2, element(2, Open_G_E), Base).
-
+   
+         
 range(X, X) -> [];
 range(A, X) when A<X -> 
     [A|range(A+1, X)].
@@ -290,72 +252,12 @@ many(X, N) when N > 0 ->
     [X|many(X, N-1)].
     
                           
-test(1) ->
-
-    E = secp256k1:make(),
-    Base = secp256k1:order(E),
-    A1 = [3,4],
-    A2 = [5,6],
-    S = length(A1),
-    {G, H, Q} = pedersen:basis(S, E),
-
-    %first a review of doing lots of individual ipa proofs.
-
-    B1 = [1, 0],%A1 dot B1 is 3
-    B2 = [0, 1],%A2 dot B2 is 6
-
-    Proof1 = pedersen:make_ipa(A1, B1, G, H, Q, E),
-    {_, 10, _, _, _, _} = Proof1,
-    true = pedersen:verify_ipa(Proof1, B1, G, H, Q, E),
-    Proof2 = pedersen:make_ipa(A2, B2, G, H, Q, E),
-    {_, 6, _, _, _, _} = Proof2,
-    true = pedersen:verify_ipa(Proof2, B2, G, H, Q, E),
-
-    %Now lets try combining them.
-    %we have 2 commitments
-    C1 = pedersen:commit(A1, G),
-    C2 = pedersen:commit(A2, G),
-    
-    %f_0(z_0) -> y_0 
-    %A1 dot B1 is 10
-    %A2 dot B2 is 6
-
-    %Root64 = primitive_nth_root(64, E),
-    Root2 = primitive_nth_root(2, E),
-
-    W1 = [Root2, 0],
-    W2 = [0, Root2],
-
-    %(A1 dot W1) + (A2 dot W2) = root2*((A1 dot B1) + (A2 dot B2)) = root2 * 9.
-
-    %to prove:
-    % A1 dot B1 = 3, A2 dot B2 = 6.
-    % -> A1 dot W1 = 3*root2, A2 dot W2 = 6*root2
-
-    %given commitments C1, C2. prove: A1 dot W1 = 3*root2, A2 dot W2 = 6*root2
-
-    R = random:uniform(Base),
-
-    %find polynomial g(x) = 
-    % ((r^0)*(f_0(x)-y_0)/(x - z_0)) + 
-    % ((r^1)*(f_1(x)-y_1)/(x - z_1))
-    %->
-    % (1 * ((A1 dot x) - 3*root2)/(x - 1)) + 
-    % (R * ((A2 dot x) - 6*root2)/(x - root2))
-    %->
-    % (1 * (([3,4] dot x) - 3*root2)/(x - 1)) + 
-    % (R * (([5,6] dot x) - 6*root2)/(x - root2))
-
-
-
-    success;
 test(2) ->
     %dth root of unity
     E = secp256k1:make(),
     Base = secp256k1:order(E),
-    Prime = secp256k1:field_prime(E),
 
-    R1 = random:uniform(Base),
+    R1 = rand:uniform(Base),
     
     R2 = basics:lrpow(R1, Base-2, Base),
     R3 = basics:lrpow(R1, (Base-1) div 2, Base),
@@ -378,235 +280,60 @@ test(2) ->
      basics:lrpow(Root64, 64, Base),
      Root, 
      Root64};
-test(3) ->
-    %trying to build the verkle again.
-
-    %t(t(3, 5), t(7, 11))
-
-    PC = polynomial_commitments,
-
-    E = secp256k1:make(),
-    Base = secp256k1:order(E),
-    F1 = PC:evaluation_to_coefficient(
-           [3, 5], Base),
-    F2 = PC:evaluation_to_coefficient(
-           [7, 11], Base),
-    F3 = PC:evaluation_to_coefficient(
-           [13, 17], Base),
-    
-    3 = PC:eval_poly(1, F1, Base),
-    5 = PC:eval_poly(2, F1, Base),
-    %{F1, F2}.
-    R = random:uniform(Base),
-    Z0 = 1,
-    Z1 = 2,
-    Z2 = 3,
-    G = add_polys(
-          [PC:div_poly(PC:subtract_poly(F1, [3], Base),
-                   PC:base_polynomial(Z0, Base),
-                   Base),
-          PC:mul_poly_c(
-            R, 
-            PC:div_poly(PC:subtract_poly(F2, [11], Base),
-                     PC:base_polynomial(Z1, Base),
-                     Base),
-            Base),
-           PC:mul_poly_c(
-             pedersen:fmul(R, R, E), 
-             PC:div_poly(PC:subtract_poly(F3, [PC:eval_poly(Z2, F3, Base)], Base),
-                         PC:base_polynomial(Z2, Base),
-                         Base),
-             Base)
-          ],
-          Base),
-    Ys = lists:zipwith(
-           fun(F, Z) ->
-                   PC:eval_poly(Z, F, Base)
-           end, [F1, F2, F3], [Z0, Z1, Z2]),
-    G = calc_G(R, [F1, F2, F3], Ys, 
-               [Z0, Z1, Z2], Base),
-    {PC:eval_poly(Z2, F3, Base),
-      G
-    };
-test(4) ->
-    %in coefficient format. slower, but possibly easier to understand.
-    PC = polynomial_commitments,
-    E = secp256k1:make(),
-    {Gs, Hs, Q} = pedersen:basis(4, E),
-    Base = secp256k1:order(E),
-    A1 = [1,1,2],
-    A2 = [2,4,6],
-    A3 = [2,3,5],
-    A4 = [3,5,8],
-    F1 = PC:evaluation_to_coefficient(
-           A1, Base),
-    F2 = PC:evaluation_to_coefficient(
-           A2, Base),
-    F3 = PC:evaluation_to_coefficient(
-           A3, Base),
-    F4 = PC:evaluation_to_coefficient(
-           A4, Base),
-    Fs = [F1, F2, F3, F4],
-    Zs = [1,2,3,4],%the spot we are looking up inside a commitment.
-    Commits = [pedersen:commit(F1, Gs, E),
-               pedersen:commit(F2, Gs, E),
-               pedersen:commit(F3, Gs, E),
-               pedersen:commit(F4, Gs, E)],
-    Ys = lists:zipwith(%the value we look up in each commitment.
-           fun(F, Z) ->
-                   PC:eval_poly(Z, F, Base)
-           end, Fs, Zs),
-    R = calc_R(Commits, Zs, Ys, <<>>),
-    G = calc_G(R, Fs, Ys, Zs, Base),
-
-    CommitG = pedersen:commit(G, Gs, E),%in the notes it is D.
-    
-    T = calc_T(CommitG, R),
-
-    GT = PC:eval_poly(T, G, Base),
-
-    %E_list = calc_E(R, 1, T, Zs, Commits, E),
-    %CommitE = pedersen:sum_up(E_list, E),
-
-    %need to calculate an opening to commit E at T.
-
-    H = calc_H(R, 1, T, Fs, Zs, E),%is summing up polynomials, H has a length based on how many variables there are, not how long Fs or Zs is.
-    %CommitE = pedersen:commit(H, Gs, E),
-    %sumi  r^i * f_i(X)/(T - Z_i)
-    %io:fwrite({Gs}),
-    Powers4 = PC:powers(T, 4, Base),
-    G_sub_E = lists:zipwith(
-                fun(A, B) -> sub(A, B, Base) end,
-                G++[0,0], H ++ [0]),
-                                     
-    OpenG_sub_E = pedersen:make_ipa(
-              G_sub_E, PC:powers(T, 4, Base),
-              Gs, Hs, Q, E),
-
-    %send an opening to G-E at T.
-    %send a commit to G
-    %send the Commits 
-    %they know the Gs, Hs, Q, and E as system defaults.
-    %they know the Zs and Ys from processing the block and making a list of things that need to be proved.
-
-    %trying to verify that G is a polynomial.
-
-    R = calc_R(Commits, Zs, Ys, <<>>),
-    T = calc_T(CommitG, R),
-    Powers4 = PC:powers(T, 4, Base),
-    true = pedersen:verify_ipa(
-             OpenG_sub_E, Powers4, Gs, Hs, Q, E),
-    G2 = calc_G2(R, 1, T, Ys, Zs, Base),
-
-    Neg_E_list = neg_calc_E(R, 1, T, Zs, Commits, E),%commits are related to Fs
-    CommitNegE = pedersen:sum_up(Neg_E_list, E),
-    CommitG_sub_E = pedersen:add(CommitG, CommitNegE, E),
-    CommitG_sub_E = element(1, OpenG_sub_E),
-
-    0 = add(G2, element(2, OpenG_sub_E), Base),
-
-    {CommitG, %an elliptic point element
-     Commits, %one elliptic point per IPA being proved
-     OpenG_sub_E %an single IPA, as 4 + 2*log2(many variables per ipa) elliptic curve points, and one integer.
-    };
-    %success;
-test(5) ->
-    Domain = [1,2,3,4],
-    io:fwrite("setup parameters\n"),
-    E = secp256k1:make(),
-    P = make_parameters(Domain, E),
-    Base = P#p.b,
-    io:fwrite("prepare values to commit\n"),
-    A1 = [1,1,2,3],
-    A2 = [2,4,6,8],
-    A3 = [2,3,5,7],
-    A4 = [3,5,8,13],
-    As = [A1, A2, A3, A4],
-    Zs = [1,2,3,2],
-    Ys = lists:zipwith(
-           fun(F, Z) ->
-                   poly:eval_e(Z, F, Domain, Base)
-           end, As, Zs),
-    io:fwrite("make proof\n"),
-    Gs = E#p.g,
-    Commits = lists:map(
-                  fun(A) ->
-                          poly:commit_c(A, Gs, E)
-                  end, As),
-    Proof = prove(As, Zs, Domain, Commits, P),
-    io:fwrite("verify proof\n"),
-    true = verify(Proof, Zs, Ys, P),
-    success;
-test(6) ->
-
-    %10:    0.0128  781   
-    %100:   0.0690  1449   6
-    %500:           2229   6
-    %1000:          2600   7
-    %2000:  0.7669  2880   8
-    %3000:          3032   9
-    %4000:  1.4049  2959   9
-    %5000:          2918   10, 11 is worse 2502
-    %10000:         3000   11, 10: 2743, 12: 2179
-    %20000:         2500   12,
-
-    %3000:  1.3960  2149   11
-    %4000:  1.7172  2329   11
-    %5000:  2.6972  1853   12
-    %10000: 6.596   1516   13
-
-    Many = 1000,
-    %verifies 49 per second
-    %we want ~120 000 per second. a factor of 2500 short.
-    %switching to jacob format saves about 5x.
-    %bucket method saves about 24x
-    %rewrite to C saves around 5x
+test(7) ->
+    %updating to jacob format.
+    Many = 50000,
+    io:fwrite("many is "),
+    io:fwrite(integer_to_list(Many)),
+    io:fwrite("\n"),
     E = secp256k1:make(),
     Base = secp256k1:order(E),
     Root4 = primitive_nth_root(4, E),
     Root4b = mul(Root4, Root4, Base),
     Root4c = mul(Root4b, Root4, Base),
     Domain = [1, Root4, Root4b, Root4c],
-    io:fwrite("setup parameters\n"),
-    P = make_parameters(Domain, E),
-    %Base = P#p.b,
-    io:fwrite("prepare values to commit\n"),
-    As = lists:map(fun(R) -> [sub(0, R, Base),
-    %As = lists:map(fun(_R) -> [sub(0, 4, Base),
-                              sub(0, R+3, Base),
-                              sub(0, R+2, Base),
-                              sub(0, R+1, Base)] end,
+    %Domain = [5,6,7,8],
+    P = make_parameters_jacob(Domain, E),
+    A = [sub(0, 4, Base),
+         sub(0, 3, Base),
+         sub(0, 2, Base),
+         sub(0, 1, Base)],
+    As = lists:map(fun(_) -> A end,
                    range(0, Many)),
+    %As = lists:map(fun(R) -> [sub(0, R, Base),
+    %                          sub(0, R+3, Base),
+    %                          sub(0, R+2, Base),
+   %                           sub(0, R+1, Base)] end,
+   %                range(0, Many)),
+    %Zs = many(Root4, Many),
     Zs = many(hd(tl(Domain)), Many),
     Ys = lists:zipwith(
            fun(F, Z) ->
                    poly:eval_e(Z, F, Domain, Base)
            end, As, Zs),
     Gs = P#p.g,
-%    Commits = lists:map(
-%                fun(A) ->
-                        %poly:commit_c(A, Gs, E)
-%                        pedersen:commit_old(A, Gs, E)
-%                end, As),
-    Commit1 = pedersen:commit(hd(As), Gs, E),
-    Commits = lists:map(
+    Commit1 = ipa:commit(hd(As), Gs, E),
+    Commits0 = lists:map(
       fun(A) ->
-                                                %poly:commit_c(A, Gs, E)
-              
-              pedersen:commit(A, Gs, E)
-              %Commit1
+              %ipa:commit(A, Gs, E)
+              Commit1
       end, As),
+    T1 = erlang:timestamp(),
+    Commits = secp256k1:simplify_Zs_batch(
+                Commits0),
     io:fwrite("make proof\n"),
-    %T1 = erlang:timestamp(),
-    Proof = prove(As, Zs, Domain, Commits, P),
+    Proof = prove_jacob(As, Zs, Commits, P),
+    {P1, Ps1, Open = {_,_,Ps2,_,_}} = Proof,
+    [P1b|Ps2b] = secp256k1:simplify_Zs_batch(
+                   [P1|Ps2]),
+    Open2 = setelement(3, Open, Ps2b),
+    Proof2 = {P1b, Ps1, Open2},
     T2 = erlang:timestamp(),
     io:fwrite("verify proof\n"),
-    true = verify(Proof, Zs, Ys, P),
+    true = verify_jacob(Proof2, Zs, Ys, P),
     T3 = erlang:timestamp(),
-    io:fwrite("\n"),
-    {%timer:now_diff(T2, T1),
-     verify_time, timer:now_diff(T3, T2)}.
-%success.
+    {prove, timer:now_diff(T2, T1),
+      verify, timer:now_diff(T3, T2)}.
     
                           
     
